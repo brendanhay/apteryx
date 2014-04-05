@@ -17,6 +17,7 @@ cabal.sandbox.config
 dist
 tmp
 log
+vendor
 
 # CTAGS
 TAGS
