@@ -1,0 +1,70 @@
+name:                  s3apt
+version:               0.1.0
+synopsis:              S3 Backed APT Repository
+homepage:              http://github.com/brendanhay/s3apt
+license:               OtherLicense
+license-file:          LICENSE
+author:                Brendan Hay
+maintainer:            Brendan Hay <brendan.g.hay@gmail.com>
+copyright:             Copyright (c) 2014 Brendan Hay
+stability:             Experimental
+category:              AWS, Cloud, Infrastructure
+build-type:            Simple
+cabal-version:         >= 1.10
+
+description:
+    Pending
+
+extra-source-files:
+    README.md
+
+source-repository head
+    type:     git
+    location: git://github.com/brendanhay/s3apt.git
+
+library
+    default-language:  Haskell2010
+    hs-source-dirs:    src
+    ghc-options:       -Wall
+
+    exposed-modules:
+        S3apt.API
+      , S3apt.Dict
+      , S3apt.Types
+      , S3apt.WS
+
+    other-modules:
+        S3apt.App
+
+    build-depends:
+        base                 >= 4.6 && < 5
+      , aeson                >= 0.7
+      , amazonka             >= 0.2.5
+      , async
+      , bytestring
+      , case-insensitive
+      , data-timeout         == 0.3.*
+      , exceptions           == 0.5.*
+      , hashable             == 1.2.*
+      , http-types           == 0.8.*
+      , monad-retry          == 0.2.*
+      , optparse-applicative == 0.8.*
+      , text
+      , tinylog              == 0.7.*
+      , transformers
+      , unordered-containers
+      , vector
+      , wai                  == 2.1.*
+      , wai-extra            == 2.1.*
+      , wai-predicates       >= 0.3.1 && < 0.4
+      , wai-routing          >= 0.5.1 && < 0.6
+      , warp                 == 2.1.*
+
+executable s3apt
+    main-is:            src/Main.hs
+    default-language:   Haskell2010
+    ghc-options:        -threaded -Wall -with-rtsopts=-N -with-rtsopts=-T
+
+    build-depends:
+        base
+      , s3apt

@@ -1,0 +1,44 @@
+# Haskell
+cabal-dev
+*.o
+*.hi
+*.chi
+*.chs.h
+*.prof*
+*.aux*
+*.ps*
+*.hp*
+.shelly
+Setup.hs
+cabal.sandbox.config
+.cabal-sandbox
+
+# Dirs
+dist
+tmp
+log
+
+# CTAGS
+TAGS
+tags
+
+# Emacs/Vim
+*~
+*#
+.#*
+\#*#
+.*.sw[a-z]
+*.un~
+*.org
+
+# OSX
+.DS_Store
+
+# Artifacts
+*.tar
+*.gz
+*.tmp
+.devel
+.deps
+.test
+.metadata
