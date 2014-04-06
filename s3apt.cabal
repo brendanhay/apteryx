@@ -29,11 +29,15 @@ library
         -Wall
 
     exposed-modules:
+          S3Apt.IO
 
     other-modules:
 
     build-depends:
           base                 >= 4.6 && < 5
+        , directory
+        , optparse-applicative
+        , text
 
 executable s3apt-rebuild
     main-is:            Main.hs
@@ -58,3 +62,25 @@ executable s3apt-rebuild
         , s3apt
         , text
         , transformers
+
+executable s3apt-indexer
+    main-is:            Main.hs
+    hs-source-dirs:     s3apt-indexer
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-N
+        -with-rtsopts=-T
+
+    build-depends:
+          async
+        , base
+        , directory
+        , fsnotify
+        , optparse-applicative
+        , s3apt
+        , stm
+        , system-filepath
+        , text
+        , unix

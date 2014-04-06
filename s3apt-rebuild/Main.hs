@@ -19,8 +19,8 @@ import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Char             (isDigit)
 import           Data.Conduit
-import qualified Data.Conduit.List     as Conduit
 import qualified Data.Conduit.Binary   as Conduit
+import qualified Data.Conduit.List     as Conduit
 import           Data.List             (sort, nub)
 import qualified Data.Map.Strict       as Map
 import           Data.Maybe
@@ -33,6 +33,7 @@ import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types    (urlEncode)
 import           Options.Applicative
+import           S3Apt.IO
 import           System.Directory
 import           System.Exit
 import           System.IO
@@ -63,72 +64,58 @@ data Options = Options
     , optDebug    :: !Bool
     } deriving (Eq, Show)
 
-parseOptions :: IO Options
-parseOptions = customExecParser
-    (prefs showHelpOnError)
-    (info (helper <*> parser) fullDesc)
-  where
-    textOption = fmap Text.pack . strOption
+options :: Parser Options
+options = Options
+    <$> textOption
+         ( long "bucket"
+        <> short 'b'
+        <> metavar "BUCKET"
+        <> help "S3 bucket to crawl for packages."
+         )
 
-    parser = Options
-        <$> textOption
-             ( long "bucket"
-            <> short 'b'
-            <> metavar "BUCKET"
-            <> help "S3 bucket to crawl for packages."
-             )
+    <*> optional (textOption
+         $ long "prefix"
+        <> short 'p'
+        <> metavar "PREFIX"
+        <> help "S3 key prefix to limit the bucket contents to."
+         )
 
-        <*> optional (textOption
-             $ long "prefix"
-            <> short 'p'
-            <> metavar "PREFIX"
-            <> help "S3 path prefix to limit the bucket contents to."
-             )
+    <*> textOption
+         ( long "incoming"
+        <> short 'i'
+        <> metavar "PATH"
+        <> help "Incoming directory for packages. default: incoming"
+        <> value "incoming"
+         )
 
-        <*> textOption
-             ( long "incoming"
-            <> short 'i'
-            <> metavar "PATH"
-            <> help "Incoming directory for packages. default: incoming"
-            <> value "incoming"
-             )
+    <*> option
+         ( long "concurrency"
+        <> short 'c'
+        <> metavar "INT"
+        <> help "Maximum number of concurrent downloads. default: 10"
+        <> value 10
+         )
 
-        <*> option
-             ( long "concurrency"
-            <> short 'c'
-            <> metavar "INT"
-            <> help "Maximum number of concurrent downloads. default: 10"
-            <> value 10
-             )
+    <*> option
+         ( long "versions"
+        <> short 'v'
+        <> metavar "INT"
+        <> help "Number versions to limit the downloads to. default: 3"
+        <> value 3
+         )
 
-        <*> option
-             ( long "versions"
-            <> short 'v'
-            <> metavar "INT"
-            <> help "Number versions to retain in the package index. default: 3"
-            <> value 3
-             )
-
-        <*> switch
-             ( long "debug"
-            <> short 'd'
-            <> help "Print debug output."
-             )
+    <*> switch
+         ( long "debug"
+        <> short 'd'
+        <> help "Print debug output."
+         )
 
 main :: IO ()
 main = do
-    o@Options{..} <- parseOptions
+    o@Options{..} <- parseOptions options
 
-    hSetBuffering stdout LineBuffering
-    hSetBuffering stderr LineBuffering
-
-    let dir = Text.unpack optIncoming
-    createDirectoryIfMissing True dir
-
-    -- Ensure any permission errors are caught.
-    p <- doesDirectoryExist dir
-    unless p $
-        hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
+    setBuffering
+    ensureExists optIncoming
 
     r <- enqueue o
     either (\e -> hPrint stderr e >> exitFailure)
@@ -215,6 +202,3 @@ stripPrefix x y = fromMaybe y (Text.stripPrefix x y)
 
 stripSuffix :: Text -> Text -> Text
 stripSuffix x y = fromMaybe y (Text.stripSuffix x y)
-
-debExt :: Text
-debExt = ".deb"
