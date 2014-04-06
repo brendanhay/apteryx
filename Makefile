@@ -1,20 +1,13 @@
-SHELL        := /usr/bin/env bash
-NAME         := s3apt
-VERSION      := $(shell sed -n 's/^version: *\(.*\)$$/\1/p' $(NAME).cabal)
-BUILD_NUMBER ?= 0
-DEB          := $(NAME)_$(VERSION)+$(BUILD_NUMBER)_amd64.deb
-FLAGS        := --disable-documentation --disable-library-coverage
-DEPS         := vendor/amazonka vendor/wai-route
-BIN          := dist/build/$(NAME)/$(NAME)
-OUT          := dist/$(NAME)
+SHELL := /usr/bin/env bash
+FLAGS := --disable-documentation --disable-library-coverage
+DEPS  := vendor/amazonka vendor/wai-route
 
-.PHONY: $(BIN) clean test lint
+.PHONY: build clean test lint
 
-all: deps build
+all: deps build link
 
-build: $(BIN)
-
-dist: deps dist/$(DEB)
+link:
+	$(foreach dir, $(wildcard s3apt-*),ln -fs dist/build/$(dir)/$(dir) $(dir:s3apt-%=%);)
 
 clean:
 	-rm -rf dist cabal.sandbox.config .cabal-sandbox $(OUT)
@@ -26,19 +19,8 @@ test:
 lint:
 	hlint src
 
-$(BIN):
+build:
 	cabal build $(addprefix -,$(findstring j,$(MAKEFLAGS)))
-
-$(OUT): $(BIN)
-	strip -o $(OUT) $< && upx $<
-
-%.deb: $(OUT)
-	makedeb --name=$(NAME) \
-	 --version=$(VERSION) \
-	 --debian-dir=deb \
-	 --build=$(BUILD_NUMBER) \
-	 --architecture=amd64 \
-	 --output-dir=dist
 
 deps: add-sources
 	cabal install -j $(FLAGS) --only-dependencies
