@@ -38,23 +38,6 @@ import           System.Directory
 import           System.Exit
 import           System.IO
 
-data Arch
-    = Amd64
-    | I386
-    | Other
-      deriving (Eq, Ord, Show)
-
-data Entry = Entry
-    { entryKey     :: !Text
-    , entryName    :: !Text
-    , entryVersion :: [Text]
-    } deriving (Eq, Show)
-
-instance Ord Entry where
-    a `compare` b = f a `compare` f b
-      where
-        f Entry{..} = Down (entryName, entryVersion)
-
 data Options = Options
     { optBucket   :: !Text
     , optPrefix   :: Maybe Text
@@ -109,6 +92,23 @@ options = Options
         <> short 'd'
         <> help "Print debug output."
          )
+
+data Arch
+    = Amd64
+    | I386
+    | Other
+      deriving (Eq, Ord, Show)
+
+data Entry = Entry
+    { entryKey     :: !Text
+    , entryName    :: !Text
+    , entryVersion :: [Text]
+    } deriving (Eq, Show)
+
+instance Ord Entry where
+    a `compare` b = f a `compare` f b
+      where
+        f Entry{..} = Down (entryName, entryVersion)
 
 main :: IO ()
 main = do

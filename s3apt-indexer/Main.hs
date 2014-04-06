@@ -30,6 +30,10 @@ import           System.Directory
 import           System.FSNotify
 import           System.Posix.Signals
 
+data Task
+    = Exit
+    | Task FilePath
+
 data Options = Options
     { optBucket   :: !Text
     , optPrefix   :: Maybe Text
@@ -85,10 +89,6 @@ options = Options
         <> help "Print debug output."
          )
 
-data Task
-    = Exit
-    | Task FilePath
-
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
@@ -138,10 +138,10 @@ worker queue = do
     f "started."
     go f
   where
+    msg t s = putStrLn $ "Worker " ++ t ++ " " ++ s
+
     go f = do
         x <- atomically $ readTBQueue queue
         case x of
             Exit   -> f "exiting..."
             Task p -> f ("processing " ++ show p) >> threadDelay 1000000 >> go f
-
-    msg t s = putStrLn $ "Worker " ++ t ++ " " ++ s
