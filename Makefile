@@ -36,4 +36,3 @@ vendor/wai-route:
 
 vendor/%:
 	git clone https://github.com/brendanhay/$*.git $@
-
