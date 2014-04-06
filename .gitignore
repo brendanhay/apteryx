@@ -18,6 +18,7 @@ dist
 tmp
 log
 vendor
+incoming
 
 # CTAGS
 TAGS
