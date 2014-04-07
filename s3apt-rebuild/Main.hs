@@ -17,31 +17,34 @@ module Main (main) where
 import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Data.Char             (isDigit)
+import           Data.Char                 (isDigit)
 import           Data.Conduit
-import qualified Data.Conduit.Binary   as Conduit
-import qualified Data.Conduit.List     as Conduit
-import           Data.List             (sort, nub)
-import qualified Data.Map.Strict       as Map
+import qualified Data.Conduit.Binary       as Conduit
+import qualified Data.Conduit.List         as Conduit
+import           Data.List                 (sort, nub)
+import qualified Data.Map.Strict           as Map
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
-import           Data.Text             (Text)
-import qualified Data.Text             as Text
-import qualified Data.Text.Encoding    as Text
+import           Data.Text                 (Text)
+import qualified Data.Text                 as Text
+import qualified Data.Text.Encoding        as Text
+import           Filesystem.Path.CurrentOS hiding (stripPrefix, concat)
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
-import           Network.HTTP.Types    (urlEncode)
+import           Network.HTTP.Types        (urlEncode)
 import           Options.Applicative
+import           Prelude                   hiding (FilePath)
 import           S3Apt.IO
+import           S3Apt.Types
 import           System.Directory
 import           System.Exit
-import           System.IO
+import           System.IO                 hiding (FilePath)
 
 data Options = Options
     { optBucket   :: !Text
     , optPrefix   :: Maybe Text
-    , optIncoming :: !Text
+    , optIncoming :: !FilePath
     , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
@@ -63,7 +66,7 @@ options = Options
         <> help "S3 key prefix to limit the bucket contents to."
          )
 
-    <*> textOption
+    <*> pathOption
          ( long "incoming"
         <> short 'i'
         <> metavar "PATH"
@@ -92,12 +95,6 @@ options = Options
         <> short 'd'
         <> help "Print debug output."
          )
-
-data Arch
-    = Amd64
-    | I386
-    | Other
-      deriving (Eq, Ord, Show)
 
 data Entry = Entry
     { entryKey     :: !Text
@@ -180,7 +177,7 @@ download Options{..} Entry{..} = do
             liftIO (putStrLn $ "Downloading " ++ path)
             responseBody rs $$+- Conduit.sinkFile path
   where
-    path = Text.unpack $ stripSuffix "/" optIncoming <> "/" <> entryName
+    path = encodeString $ optIncoming </> fromText entryName
 
     encodedKey = Text.decodeUtf8
         . urlEncode True

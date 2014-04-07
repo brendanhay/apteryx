@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 FLAGS := --disable-documentation --disable-library-coverage
-DEPS  := vendor/amazonka vendor/wai-route
+DEPS  := vendor/amazonka vendor/tinylog vendor/wai-predicates
 
 .PHONY: build clean test lint
 
@@ -31,8 +31,11 @@ add-sources: cabal.sandbox.config $(DEPS)
 cabal.sandbox.config:
 	cabal sandbox init
 
-vendor/wai-route:
-	git clone https://github.com/romanb/$*.git $@
+vendor/tinylog:
+	git clone https://github.com/twittner/tinylog.git $@
+
+vendor/wai-predicates:
+	git clone https://github.com/twittner/wai-predicates.git $@
 
 vendor/%:
 	git clone https://github.com/brendanhay/$*.git $@
