@@ -39,6 +39,9 @@ library
         , byteable
         , bytestring
         , directory
+        , errors
+        , exceptions
+        , mtl
         , optparse-applicative
         , system-filepath
         , text
@@ -103,7 +106,6 @@ executable s3apt-server
         , s3apt
         , stm
         , system-filepath
-        , temporary
         , text
         , unix
 
