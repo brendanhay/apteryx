@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 FLAGS := --disable-documentation --disable-library-coverage
-DEPS  := vendor/amazonka vendor/tinylog vendor/wai-predicates
+DEPS  := vendor/amazonka vendor/tinylog
 
 .PHONY: build clean test lint
 
@@ -33,9 +33,6 @@ cabal.sandbox.config:
 
 vendor/tinylog:
 	git clone https://github.com/twittner/tinylog.git $@
-
-vendor/wai-predicates:
-	git clone https://github.com/twittner/wai-predicates.git $@
 
 vendor/%:
 	git clone https://github.com/brendanhay/$*.git $@

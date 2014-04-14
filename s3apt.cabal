@@ -38,7 +38,7 @@ library
         , attoparsec
         , base                 >= 4.6 && < 5
         , byteable
-        , bytestring
+        , bytestring           >= 0.10.4
         , case-insensitive
         , conduit              >= 0.1.1
         , conduit-extra
@@ -80,7 +80,7 @@ executable s3apt-server
         , tinylog
         , wai
         , wai-extra
-        , wai-predicates
+        , wai-predicates       >= 0.4
         , wai-routing
         , warp
 
@@ -93,16 +93,18 @@ executable s3apt-rebuild
         -Wall
         -with-rtsopts=-N
         -with-rtsopts=-T
-     -funbox-strict-fields
+        -funbox-strict-fields
+
     build-depends:
-          amazonka
+          amazonka             >= 0.2.6
+        , async
         , base
-        , conduit              >= 0.1.1
+        , conduit
         , conduit-extra
         , containers
         , directory
-        , http-types
         , http-conduit
+        , http-types
         , optparse-applicative
         , s3apt
         , system-filepath

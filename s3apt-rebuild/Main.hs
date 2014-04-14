@@ -15,6 +15,7 @@
 module Main (main) where
 
 import           Control.Applicative
+import           Control.Concurrent.Async  (waitEitherCancel)
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Char                 (isDigit)
@@ -29,6 +30,7 @@ import           Data.Ord
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Data.Text.Encoding        as Text
+import           Data.Word
 import           Filesystem.Path.CurrentOS hiding (stripPrefix, concat)
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
@@ -36,65 +38,11 @@ import           Network.HTTP.Types        (urlEncode)
 import           Options.Applicative
 import           Prelude                   hiding (FilePath)
 import           S3Apt.IO
+import           S3Apt.Rebuild.Options
 import           S3Apt.Types
 import           System.Directory
 import           System.Exit
 import           System.IO                 hiding (FilePath)
-
-data Options = Options
-    { optBucket   :: !Text
-    , optPrefix   :: Maybe Text
-    , optIncoming :: !FilePath
-    , optN        :: !Int
-    , optVersions :: !Int
-    , optDebug    :: !Bool
-    } deriving (Eq, Show)
-
-options :: Parser Options
-options = Options
-    <$> textOption
-         ( long "bucket"
-        <> short 'b'
-        <> metavar "BUCKET"
-        <> help "S3 bucket to crawl for packages."
-         )
-
-    <*> optional (textOption
-         $ long "prefix"
-        <> short 'p'
-        <> metavar "PREFIX"
-        <> help "S3 key prefix to limit the bucket contents to."
-         )
-
-    <*> pathOption
-         ( long "incoming"
-        <> short 'i'
-        <> metavar "PATH"
-        <> help "Incoming directory for packages. default: incoming"
-        <> value "incoming"
-         )
-
-    <*> option
-         ( long "concurrency"
-        <> short 'c'
-        <> metavar "INT"
-        <> help "Maximum number of concurrent downloads. default: 10"
-        <> value 10
-         )
-
-    <*> option
-         ( long "versions"
-        <> short 'v'
-        <> metavar "INT"
-        <> help "Number versions to limit the downloads to. default: 3"
-        <> value 3
-         )
-
-    <*> switch
-         ( long "debug"
-        <> short 'd'
-        <> help "Print debug output."
-         )
 
 data Entry = Entry
     { entryKey     :: !Text
@@ -109,15 +57,18 @@ instance Ord Entry where
 
 main :: IO ()
 main = do
+--    setBuffering
     o@Options{..} <- parseOptions options
 
-    setBuffering
-    ensureExists optIncoming
+    return ()
+--    d <- download o
+    -- u <- enqueue o
 
-    r <- enqueue o
-    either (\e -> hPrint stderr e >> exitFailure)
-           (const $ putStrLn "Completed." >> exitSuccess)
-           r
+    -- void $ waitEitherCancel d u
+
+    -- either (\e -> hPrint stderr e >> exitFailure)
+    --        (const $ putStrLn "Completed." >> exitSuccess)
+    --        r
 
 enqueue :: Options -> IO (Either AWSError ())
 enqueue o@Options{..} = runAWS AuthDiscover optDebug $ do
@@ -132,6 +83,26 @@ enqueue o@Options{..} = runAWS AuthDiscover optDebug $ do
         $$ Conduit.sinkNull
   where
     prefix = stripPrefix "/" <$> optPrefix
+
+-- process Options{..} Entry{..} man = do
+--     rs <- send (GetObject optBucket encodedKey [])
+--     responseBody rs $$+- Conduit.sinkFile path
+
+--     liftIO (putStrLn $ "Downloading " ++ path)
+--     rs <- send $ GetObject optBucket encodedKey []
+
+--     requestBodySourceChunkedIO (responseBody rs)
+
+--     request <- parseUrl "http://google.com/"
+--       withManager $ \manager -> do
+--           response <- http request manager
+--           responseBody response C.$$+- sinkFile "google.html"
+--   where
+
+--     encodedKey = Text.decodeUtf8
+--         . urlEncode True
+--         . Text.encodeUtf8
+--         $ stripPrefix "/" entryKey
 
 contents :: Monad m => Conduit GetBucketResponse m Contents
 contents = Conduit.concatMap (filter match . gbrContents)
