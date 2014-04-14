@@ -1,4 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings          #-}
 
 -- Module      : S3Apt.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -12,17 +13,14 @@
 
 module S3Apt.Types where
 
-import           Control.Monad
-import           Data.ByteString (ByteString)
+import           Control.Exception
+import           Crypto.Hash
+import           Data.ByteString            (ByteString)
+import qualified Data.ByteString.Char8      as BS
+import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Byteable
-import qualified Data.Text                 as Text
-import           Data.Text                (Text)
-import           Filesystem.Path.CurrentOS
-import           Options.Applicative
-import           Prelude                   hiding (FilePath)
-import           System.Directory
-import           System.Exit
-import           System.IO                 hiding (FilePath)
+import           Data.Map.Strict            (Map)
+import           Data.Text                  (Text)
 
 data Arch
     = Amd64
@@ -39,3 +37,27 @@ archFromBS :: ByteString -> Arch
 archFromBS "amd64" = Amd64
 archFromBS "i386"  = I386
 archFromBS _       = Other
+
+newtype Size = Size Integer
+    deriving (Eq, Ord, Show, Enum, Num, Real, Integral)
+
+instance Byteable Size where
+    toBytes (Size n) = BS.pack (show n)
+
+data Control = Control
+    { ctlPackage  :: !ByteString
+    , ctlVersion  :: !ByteString
+    , ctlArch     :: !Arch
+    , ctlSize     :: !Size
+    , ctlMD5Sum   :: !(Digest MD5)
+    , ctlSHA1     :: !(Digest SHA1)
+    , ctlSHA256   :: !(Digest SHA256)
+    , ctlOptional :: Map ByteString ByteString
+    } deriving (Eq, Show)
+
+data Error
+    = ShellError   Int String LBS.ByteString
+    | MissingField Text
+    | InvalidField Text
+    | Exception    SomeException
+      deriving (Show)
