@@ -96,17 +96,16 @@ executable s3apt-rebuild
         -funbox-strict-fields
 
     build-depends:
-          amazonka             >= 0.2.6
-        , async
+          amazonka             >= 0.3.0
         , base
         , conduit
-        , conduit-extra
         , containers
-        , directory
+        , exceptions
         , http-conduit
         , http-types
+        , mmorph
         , optparse-applicative
         , s3apt
-        , system-filepath
         , text
+        , text-format
         , transformers

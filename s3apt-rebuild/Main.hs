@@ -15,39 +15,36 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Control.Concurrent.Async  (waitEitherCancel)
 import           Control.Monad
-import           Control.Monad.IO.Class
-import           Data.Char                 (isDigit)
+import           Control.Monad.Catch
+import           Control.Monad.Morph
+import           Data.Char             (isDigit)
 import           Data.Conduit
-import qualified Data.Conduit.Binary       as Conduit
-import qualified Data.Conduit.List         as Conduit
-import           Data.List                 (sort, nub)
-import qualified Data.Map.Strict           as Map
+import qualified Data.Conduit.List     as Conduit
+import           Data.Int
+import           Data.List             (sort, nub)
+import qualified Data.Map.Strict       as Map
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
-import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
-import qualified Data.Text.Encoding        as Text
-import           Data.Word
-import           Filesystem.Path.CurrentOS hiding (stripPrefix, concat)
+import           Data.Text             (Text)
+import qualified Data.Text             as Text
+import qualified Data.Text.Encoding    as Text
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
-import           Network.HTTP.Types        (urlEncode)
-import           Options.Applicative
-import           Prelude                   hiding (FilePath)
+import           Network.HTTP.Types
 import           S3Apt.IO
+import           S3Apt.Rebuild.Log
 import           S3Apt.Rebuild.Options
 import           S3Apt.Types
-import           System.Directory
 import           System.Exit
-import           System.IO                 hiding (FilePath)
+import           System.IO
 
 data Entry = Entry
     { entryKey     :: !Text
     , entryName    :: !Text
     , entryVersion :: [Text]
+    , entrySize    :: !Int64
     } deriving (Eq, Show)
 
 instance Ord Entry where
@@ -57,56 +54,41 @@ instance Ord Entry where
 
 main :: IO ()
 main = do
---    setBuffering
+    hSetBuffering stdout LineBuffering
+    hSetBuffering stderr LineBuffering
+
     o@Options{..} <- parseOptions options
 
-    return ()
---    d <- download o
-    -- u <- enqueue o
+    say_ name "Starting..."
 
-    -- void $ waitEitherCancel d u
+    man <- newManager conduitManagerSettings
+    rq  <- parseUrl (Text.unpack optAddress)
 
-    -- either (\e -> hPrint stderr e >> exitFailure)
-    --        (const $ putStrLn "Completed." >> exitSuccess)
-    --        r
+    say name "Checking connectivity to {}" [Text.decodeUtf8 $ host rq]
+    void $ httpLbs (rq { method = "HEAD", path = "/i/status" }) man
 
-enqueue :: Options -> IO (Either AWSError ())
-enqueue o@Options{..} = runAWS AuthDiscover optDebug $ do
-    liftIO (putStrLn "Listing bucket contents...")
-    xs <- paginate (GetBucket optBucket (Delimiter '/') prefix 200 Nothing)
-        $= contents
-        $$ catalogue optVersions
-    Conduit.sourceList xs
-        $= chunked optN
-        $= Conduit.mapM (mapM (async . download o))
-        $= Conduit.concatMapM (mapM wait)
-        $$ Conduit.sinkNull
+    rs  <- runAWS AuthDiscover optDebug $ do
+        let pre = stripPrefix "/" <$> optPrefix
+        env <- getEnv
+
+        say name "Paginating contents of {}" [optBucket]
+        xs  <- paginate (GetBucket optBucket (Delimiter '/') pre 200 Nothing)
+            $= Conduit.concatMap (filter match . gbrContents)
+            $$ catalogue optVersions
+
+        say name "Uploading files to {}" [optAddress]
+        Conduit.sourceList xs
+            $= chunked optN
+            $= Conduit.mapM (mapM (async . forward o env man rq))
+            $= Conduit.concatMapM (mapM wait)
+            $$ Conduit.sinkNull
+
+    either (\ex -> hPrint stderr ex >> exitFailure)
+           (const $ say_ name "Completed." >> exitSuccess)
+           rs
   where
-    prefix = stripPrefix "/" <$> optPrefix
+    name = "rebuild" :: Text
 
--- process Options{..} Entry{..} man = do
---     rs <- send (GetObject optBucket encodedKey [])
---     responseBody rs $$+- Conduit.sinkFile path
-
---     liftIO (putStrLn $ "Downloading " ++ path)
---     rs <- send $ GetObject optBucket encodedKey []
-
---     requestBodySourceChunkedIO (responseBody rs)
-
---     request <- parseUrl "http://google.com/"
---       withManager $ \manager -> do
---           response <- http request manager
---           responseBody response C.$$+- sinkFile "google.html"
---   where
-
---     encodedKey = Text.decodeUtf8
---         . urlEncode True
---         . Text.encodeUtf8
---         $ stripPrefix "/" entryKey
-
-contents :: Monad m => Conduit GetBucketResponse m Contents
-contents = Conduit.concatMap (filter match . gbrContents)
-  where
     match Contents{..}
         | bcSize == 0               = False
         | bcStorageClass == Glacier = False
@@ -119,9 +101,11 @@ catalogue n = go mempty
     go m = await >>= maybe (return . concat $ Map.elems m) (go . entry m)
 
     entry m Contents{..} =
-        Map.insertWith add (arch, key) [Entry bcKey name (digits ver)] m
+        Map.insertWith add (arch, key) [Entry bcKey name (digits ver) size] m
       where
         add new old = take n . nub . sort $ new <> old
+
+        size = fromIntegral bcSize
 
         (arch, ver)
             | Just x <- "amd64" `Text.stripSuffix` suf = (Amd64, x)
@@ -138,23 +122,6 @@ catalogue n = go mempty
 
         delim = flip elem "_.\\+~"
 
-download :: Options -> Entry -> AWS ()
-download Options{..} Entry{..} = do
-    p <- liftIO $ doesFileExist path
-    if p
-       then liftIO (hPutStrLn stderr $ path ++ " exists.")
-        else do
-            rs <- send (GetObject optBucket encodedKey [])
-            liftIO (putStrLn $ "Downloading " ++ path)
-            responseBody rs $$+- Conduit.sinkFile path
-  where
-    path = encodeString $ optIncoming </> fromText entryName
-
-    encodedKey = Text.decodeUtf8
-        . urlEncode True
-        . Text.encodeUtf8
-        $ stripPrefix "/" entryKey
-
 chunked :: Monad m => Int -> Conduit a m [a]
 chunked n = go []
   where
@@ -164,6 +131,32 @@ chunked n = go []
             Just x | length xs < (n - 1) -> go (x : xs)
             Just x                       -> yield (x : xs) >> go []
             Nothing                      -> void (yield xs)
+
+forward :: Options -> Env -> Manager -> Request -> Entry -> AWS ()
+forward Options{..} env man rq Entry{..} = do
+    say logKey "Retrieving from {}" [optBucket]
+    (bdy, f) <- send (GetObject optBucket encodedKey []) >>=
+        unwrapResumable . responseBody
+
+    let fwd = rq { requestBody = requestBodySourceIO entrySize (hoist aws bdy)
+                 , method      = "POST"
+                 }
+
+    say logKey "Forwarding to {}" [optAddress]
+    rs <- http fwd man `finally` f
+
+    say logKey "Status {}" [status rs]
+    responseBody rs $$+- return ()
+  where
+    aws = either throwM return <=< (`runEnv` env)
+
+    status = Text.pack . show . statusCode . responseStatus
+    logKey = Text.drop 1 $ Text.dropWhile (/= '/') entryKey
+
+    encodedKey = Text.decodeUtf8
+        . urlEncode True
+        . Text.encodeUtf8
+        $ stripPrefix "/" entryKey
 
 stripPrefix :: Text -> Text -> Text
 stripPrefix x y = fromMaybe y (Text.stripPrefix x y)

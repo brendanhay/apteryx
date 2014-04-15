@@ -40,7 +40,8 @@ import           S3Apt.Server.App
 import           S3Apt.Server.Options
 import           S3Apt.Types
 import qualified System.Logger               as Log
-import           System.LoggerT              (msg, (+++))
+import           System.LoggerT              (msg, (+++), field)
+import qualified System.LoggerT              as LogT
 
 default (ByteString)
 
@@ -87,5 +88,6 @@ packages _ = return $ responseLBS status200 [] ""
 upload :: FilePath -> Media "application" "x-deb" ::: Request -> Handler
 upload tmp (_ ::: rq) = do
     c@Control{..} <- receive tmp (requestBody rq)
+    LogT.debug $ field "uploaded" (show c)
     return . addHeader "Location" ctlPackage
            $ responseLBS status201 [] (LBS.pack $ show c)

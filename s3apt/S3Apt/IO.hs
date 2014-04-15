@@ -102,7 +102,7 @@ pathOption = fmap decodeString . strOption
 debExt :: Text
 debExt = ".deb"
 
-catchError :: (MonadIO m) => IO a -> EitherT Error m a
+catchError :: MonadIO m => IO a -> EitherT Error m a
 catchError = EitherT
     . liftIO
     . liftM (fmapL Exception)
