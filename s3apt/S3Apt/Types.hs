@@ -19,8 +19,10 @@ import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Byteable
+import           Data.Int
 import           Data.Map.Strict            (Map)
 import           Data.Text                  (Text)
+import           Network.AWS
 
 data Arch
     = Amd64
@@ -38,14 +40,15 @@ archFromBS "amd64" = Amd64
 archFromBS "i386"  = I386
 archFromBS _       = Other
 
-newtype Size = Size Integer
+newtype Size = Size Int64
     deriving (Eq, Ord, Show, Enum, Num, Real, Integral)
 
 instance Byteable Size where
     toBytes (Size n) = BS.pack (show n)
 
 data Control = Control
-    { ctlPackage  :: !ByteString
+    { ctlFilename :: !Text
+    , ctlPackage  :: !ByteString
     , ctlVersion  :: !ByteString
     , ctlArch     :: !Arch
     , ctlSize     :: !Size
@@ -61,3 +64,7 @@ data Error
     | InvalidField Text
     | Exception    SomeException
       deriving (Show)
+
+instance ToError Error where
+    toError (Exception ex) = toError ex
+    toError e              = toError (show e)

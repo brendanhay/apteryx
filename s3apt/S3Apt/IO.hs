@@ -35,6 +35,11 @@ import           System.IO                  hiding (FilePath)
 import           System.Posix.Files
 import           System.Process
 
+setBuffering :: IO ()
+setBuffering = do
+    hSetBuffering stdout LineBuffering
+    hSetBuffering stderr LineBuffering
+
 ensureExists :: FilePath -> IO ()
 ensureExists (encodeString -> dir) = do
     createDirectoryIfMissing True dir

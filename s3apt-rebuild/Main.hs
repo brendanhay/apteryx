@@ -36,8 +36,7 @@ import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
 import           S3Apt.IO
-import           S3Apt.Rebuild.Log
-import           S3Apt.Rebuild.Options
+import           S3Apt.Log
 import           S3Apt.Types
 import           System.Exit
 import           System.IO
@@ -54,13 +53,66 @@ instance Ord Entry where
       where
         f Entry{..} = Down (entryName, entryVersion)
 
+data Options = Options
+    { optBucket   :: !Text
+    , optPrefix   :: Maybe Text
+    , optAddress  :: !Text
+    , optN        :: !Int
+    , optVersions :: !Int
+    , optDebug    :: !Bool
+    } deriving (Eq, Show)
+
+options :: Parser Options
+options = Options
+    <$> textOption
+         ( long "bucket"
+        <> short 'b'
+        <> metavar "BUCKET"
+        <> help "S3 bucket to crawl for packages."
+         )
+
+    <*> optional (textOption
+         $ long "prefix"
+        <> short 'p'
+        <> metavar "PREFIX"
+        <> help "S3 key prefix to limit the bucket contents to. default: ''"
+         )
+
+    <*> textOption
+         ( long "addr"
+        <> short 'a'
+        <> metavar "ADDR"
+        <> help "Address to upload packages. default: http://localhost:8080/packages"
+        <> value "http://localhost:8080/packages"
+         )
+
+    <*> option
+         ( long "concurrency"
+        <> short 'c'
+        <> metavar "INT"
+        <> help "Maximum number of concurrent downloads. default: 10"
+        <> value 10
+         )
+
+    <*> option
+         ( long "versions"
+        <> short 'v'
+        <> metavar "INT"
+        <> help "Number versions to limit the downloads to. default: 3"
+        <> value 3
+         )
+
+    <*> switch
+         ( long "debug"
+        <> short 'd'
+        <> help "Print debug output."
+         )
+
 main :: IO ()
 main = do
-    hSetBuffering stdout LineBuffering
-    hSetBuffering stderr LineBuffering
-
     o@Options{..} <- parseOptions options
 
+    setBuffering
     say_ name "Starting..."
 
     man <- newManager conduitManagerSettings
@@ -161,9 +213,3 @@ forward Options{..} env man rq Entry{..} = do
         . urlEncode True
         . Text.encodeUtf8
         $ stripPrefix "/" entryKey
-
-stripPrefix :: Text -> Text -> Text
-stripPrefix x y = fromMaybe y (Text.stripPrefix x y)
-
-stripSuffix :: Text -> Text -> Text
-stripSuffix x y = fromMaybe y (Text.stripSuffix x y)

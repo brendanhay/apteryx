@@ -89,5 +89,9 @@ upload :: FilePath -> Media "application" "x-deb" ::: Request -> Handler
 upload tmp (_ ::: rq) = do
     c@Control{..} <- receive tmp (requestBody rq)
     LogT.debug $ field "uploaded" (show c)
+
+
+    put to s3
+
     return . addHeader "Location" ctlPackage
            $ responseLBS status201 [] (LBS.pack $ show c)
