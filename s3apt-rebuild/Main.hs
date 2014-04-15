@@ -18,6 +18,7 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.Morph
+import qualified Data.ByteString.Char8 as BS
 import           Data.Char             (isDigit)
 import           Data.Conduit
 import qualified Data.Conduit.List     as Conduit
@@ -30,6 +31,7 @@ import           Data.Ord
 import           Data.Text             (Text)
 import qualified Data.Text             as Text
 import qualified Data.Text.Encoding    as Text
+import           Data.Text.Format      (Shown(..))
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
@@ -64,8 +66,10 @@ main = do
     man <- newManager conduitManagerSettings
     rq  <- parseUrl (Text.unpack optAddress)
 
-    say name "Checking connectivity to {}" [Text.decodeUtf8 $ host rq]
-    void $ httpLbs (rq { method = "HEAD", path = "/i/status" }) man
+    let chk = rq { method = "HEAD", path = "/i/status" }
+    say name "Checking status of http://{}:{}{}"
+        [BS.unpack $ host chk, show $ port chk, BS.unpack $ path chk]
+    void $ httpLbs chk man
 
     rs  <- runAWS AuthDiscover optDebug $ do
         let pre = stripPrefix "/" <$> optPrefix
@@ -87,7 +91,7 @@ main = do
            (const $ say_ name "Completed." >> exitSuccess)
            rs
   where
-    name = "rebuild" :: Text
+    name = "main" :: Text
 
     match Contents{..}
         | bcSize == 0               = False
