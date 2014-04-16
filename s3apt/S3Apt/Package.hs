@@ -29,60 +29,44 @@ import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
-import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
 import qualified Data.Text.Encoding               as Text
-import           Filesystem.Path.CurrentOS        hiding (stripPrefix)
-import           Network.HTTP.Types
-import           Prelude                          hiding (FilePath)
+import qualified Filesystem.Path.CurrentOS        as Path
 import           S3Apt.IO
-import           S3Apt.Text
 import           S3Apt.Types
 import           System.IO                        (hClose)
 
 loadControl :: MonadIO m
-            => Text
-            -> FilePath
+            => Path
             -> Source IO ByteString
             -> EitherT Error m Control
-loadControl pre tmp src = withTempFile tmp ".deb" $ \path hd -> do
+loadControl tmp src = withTempFile tmp ".deb" $ \path hd -> do
     catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
-    bs <- runShell $
-        "ar -p " ++ encodeString path ++ " control.tar.gz | tar -Ox control"
+    let f = Path.encodeString path
+    bs <- runShell $ "ar -p " ++ f ++ " control.tar.gz | tar -Ox control"
     fs <- hoistEither (parseFields bs)
-    hoistEither =<< parseControl pre fs
+    hoistEither =<< parseControl fs
         <$> getFileSize path
         <*> hashFile path
         <*> hashFile path
         <*> hashFile path
 
-parseControl :: Text
-             -> Map ByteString ByteString
+parseControl :: Map ByteString ByteString
              -> Size
              -> Digest MD5
              -> Digest SHA1
              -> Digest SHA256
              -> Either Error Control
-parseControl pre fs size md5 sha1 sha256 = do
-    p <- require "Package"
-    v <- require "Version"
-    a <- require "Architecture"
-    return $
-        Control (file p v a) p v (archFromBS a) size md5 sha1 sha256 fields
+parseControl fs size md5 sha1 sha256 = Control
+    <$> require "Package"
+    <*> require "Version"
+    <*> (archFromBS <$> require "Architecture")
+    <*> pure size
+    <*> pure md5
+    <*> pure sha1
+    <*> pure sha256
+    <*> pure fields
   where
-    file pkg ver arch = Text.decodeUtf8 $ BS.concat
-        [ Text.encodeUtf8 $ stripPrefix "/" pre
-        , "/"
-        , urlEncode True pkg
-        , "/"
-        , urlEncode True pkg
-        , "_"
-        , urlEncode True ver
-        , "_"
-        , arch
-        , ".deb"
-        ]
-
     require k =
         maybe (Left . MissingField $ Text.decodeUtf8 k)
               Right

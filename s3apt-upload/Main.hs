@@ -14,60 +14,58 @@
 module Main (main) where
 
 import           Control.Monad.IO.Class
-import qualified Data.Conduit.Binary        as Conduit
-import           Data.Maybe
+import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import qualified Filesystem.Path.CurrentOS  as Path
+import           Data.Text                 (Text)
+import qualified Data.Text                 as Text
+import qualified Filesystem.Path.CurrentOS as Path
 import           Network.AWS
 import           Options.Applicative
 import           S3Apt.IO
-import           S3Apt.Log
+import           S3Apt.Options
 import           S3Apt.Package
 import           S3Apt.S3
 import           S3Apt.Types
 import           System.Environment
-import           System.Exit
 import           System.IO
 
 data Options = Options
-    { optBucket :: !Text
-    , optPrefix :: Maybe Text
-    , optPath   :: !Path.FilePath
-    , optTemp   :: !Path.FilePath
-    , optDebug  :: !Bool
+    { optKey     :: !Key
+    , optFile    :: !Path
+    , optTemp    :: !Path
+    , optAddress :: Maybe Text
+    , optDebug   :: !Bool
     } deriving (Eq, Show)
 
 options :: Parser Options
 options = Options
-    <$> textOption
-         ( long "bucket"
-        <> short 'b'
-        <> metavar "BUCKET"
-        <> help "S3 bucket to store packages."
-         )
-
-    <*> optional (textOption
-         $ long "prefix"
-        <> short 'p'
-        <> metavar "PREFIX"
-        <> help "Additional S3 key prefix to prepend. default: ''"
+    <$> keyOption
+         ( long "key"
+        <> short 'k'
+        <> metavar "BUCKET/PREFIX"
+        <> help "Destination S3 bucket and optional prefix to store packages. [required]"
          )
 
     <*> pathOption
          ( long "file"
         <> short 'f'
         <> metavar "PATH"
-        <> help "File to upload."
+        <> help "Path to the file to upload. [required]"
          )
 
     <*> pathOption
          ( long "tmp"
         <> short 't'
         <> metavar "PATH"
-        <> help "Temporary directory. default: /tmp"
+        <> help "Temporary directory for unpacking Debian control files. [default: /tmp]"
         <> value "/tmp"
+         )
+
+    <*> optional (textOption
+         $ long "addr"
+        <> short 'a'
+        <> metavar "ADDR"
+        <> help "Server to notify with new package description. [default: none]"
          )
 
     <*> switch
@@ -79,22 +77,10 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-    name <- Text.pack <$> getProgName
-
-    setBuffering
-    say_ name "Starting..."
-
-    let path = Path.encodeString optPath
-        pre  = fromMaybe "" optPrefix
-
-    e <- withFile path ReadMode $ \hd -> do
+    name        <- Text.pack <$> getProgName
+    runMain name . withFile (Path.encodeString optFile) ReadMode $ \hd -> do
         runAWS AuthDiscover optDebug $ do
             c@Control{..} <- liftEitherT
-               $ loadControl pre optTemp (Conduit.sourceHandle hd)
+               $ loadControl optTemp (Conduit.sourceHandle hd)
               <* liftIO (hClose hd)
-
-            upload optBucket c optPath
-
-    either (\ex -> hPrint stderr ex >> exitFailure)
-           (const $ say_ name "Completed." >> exitSuccess)
-           e
+            upload name optKey c optFile

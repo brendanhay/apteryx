@@ -18,45 +18,28 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.Morph
-import qualified Data.ByteString.Char8 as BS
-import           Data.Char             (isDigit)
 import           Data.Conduit
-import qualified Data.Conduit.List     as Conduit
-import           Data.Int
-import           Data.List             (sort, nub)
-import qualified Data.Map.Strict       as Map
-import           Data.Maybe
+import qualified Data.Conduit.List    as Conduit
 import           Data.Monoid
-import           Data.Ord
-import           Data.Text             (Text)
-import qualified Data.Text             as Text
-import qualified Data.Text.Encoding    as Text
-import           Data.Text.Format      (Shown(..))
+import           Data.Text            (Text)
+import qualified Data.Text            as Text
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
+import           Options.Applicative
 import           S3Apt.IO
 import           S3Apt.Log
+import           S3Apt.Options
+import           S3Apt.Package
+import           S3Apt.S3
 import           S3Apt.Types
-import           System.Exit
-import           System.IO
-
-data Entry = Entry
-    { entryKey     :: !Text
-    , entryName    :: !Text
-    , entryVersion :: [Text]
-    , entrySize    :: !Int64
-    } deriving (Eq, Show)
-
-instance Ord Entry where
-    a `compare` b = f a `compare` f b
-      where
-        f Entry{..} = Down (entryName, entryVersion)
+import           System.Environment
 
 data Options = Options
-    { optBucket   :: !Text
-    , optPrefix   :: Maybe Text
-    , optAddress  :: !Text
+    { optFrom     :: !Key
+    , optTo       :: !Key
+    , optTemp     :: !Path
+    , optAddress  :: Maybe Text
     , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
@@ -64,33 +47,38 @@ data Options = Options
 
 options :: Parser Options
 options = Options
-    <$> textOption
-         ( long "bucket"
-        <> short 'b'
-        <> metavar "BUCKET"
-        <> help "S3 bucket to crawl for packages."
+    <$> keyOption
+         ( long "from"
+        <> metavar "BUCKET/PREFIX"
+        <> help "Source S3 bucket and optional prefix to traverse for packages. [required]"
+         )
+
+    <*> keyOption
+         ( long "to"
+        <> metavar "BUCKET/PREFIX"
+        <> help "Destination S3 bucket and optional prefix to store packages. [required]"
+         )
+
+    <*> pathOption
+         ( long "tmp"
+        <> short 't'
+        <> metavar "PATH"
+        <> help "Temporary directory for unpacking Debian control files. [default: /tmp]"
+        <> value "/tmp"
          )
 
     <*> optional (textOption
-         $ long "prefix"
-        <> short 'p'
-        <> metavar "PREFIX"
-        <> help "S3 key prefix to limit the bucket contents to. default: ''"
-         )
-
-    <*> textOption
-         ( long "addr"
+         $ long "addr"
         <> short 'a'
         <> metavar "ADDR"
-        <> help "Address to upload packages. default: http://localhost:8080/packages"
-        <> value "http://localhost:8080/packages"
+        <> help "Server to notify with new package descriptions. [default: none]"
          )
 
     <*> option
          ( long "concurrency"
         <> short 'c'
         <> metavar "INT"
-        <> help "Maximum number of concurrent downloads. default: 10"
+        <> help "Maximum number of packages to process concurrently. [default: 10]"
         <> value 10
          )
 
@@ -98,7 +86,7 @@ options = Options
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
-        <> help "Number versions to limit the downloads to. default: 3"
+        <> help "Maximum number of most recent package versions to store. [default: 3]"
         <> value 3
          )
 
@@ -111,72 +99,31 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-
-    setBuffering
-    say_ name "Starting..."
-
-    man <- newManager conduitManagerSettings
-    rq  <- parseUrl (Text.unpack optAddress)
-
-    let chk = rq { method = "HEAD", path = "/i/status" }
-    say name "Checking status of http://{}:{}{}"
-        [BS.unpack $ host chk, show $ port chk, BS.unpack $ path chk]
-    void $ httpLbs chk man
-
-    rs  <- runAWS AuthDiscover optDebug $ do
-        let pre = stripPrefix "/" <$> optPrefix
-        env <- getEnv
-
-        say name "Paginating contents of {}" [optBucket]
-        xs  <- paginate (GetBucket optBucket (Delimiter '/') pre 200 Nothing)
-            $= Conduit.concatMap (filter match . gbrContents)
-            $$ catalogue optVersions
-
-        say name "Uploading files to {}" [optAddress]
+    name          <- Text.pack <$> getProgName
+    runMain name . runAWS AuthDiscover optDebug $ do
+        xs <- contents name optFrom optVersions
         Conduit.sourceList xs
             $= chunked optN
-            $= Conduit.mapM (mapM (async . forward o env man rq))
+            $= Conduit.mapM (mapM (async . build o))
             $= Conduit.concatMapM (mapM wait)
             $$ Conduit.sinkNull
 
-    either (\ex -> hPrint stderr ex >> exitFailure)
-           (const $ say_ name "Completed." >> exitSuccess)
-           rs
+build :: Options -> Entry -> AWS ()
+build Options{..} Entry{..} = do
+    say name "Retrieving {}" [from]
+    rs       <- send $ GetObject (keyBucket from) (keyPrefix from) []
+    (bdy, f) <- unwrapResumable (responseBody rs)
+    say name "Parsing control from {}" [from]
+    ctl      <- liftEitherT (loadControl optTemp (aws bdy)) `finally` f
+    code     <- status <$> copy name from ctl optTo
+    say name "Completed {}" [code]
   where
-    name = "main" :: Text
+    from = Key (keyBucket optFrom) entKey
 
-    match Contents{..}
-        | bcSize == 0               = False
-        | bcStorageClass == Glacier = False
-        | otherwise                 = debExt `Text.isSuffixOf` bcKey
+    status = Text.pack . show . statusCode . responseStatus
+    name   = Text.drop 1 $ Text.dropWhile (/= '/') entKey
 
--- FIXME: pulls all the keys into memory
-catalogue :: Monad m => Int -> Consumer Contents m [Entry]
-catalogue n = go mempty
-  where
-    go m = await >>= maybe (return . concat $ Map.elems m) (go . entry m)
-
-    entry m Contents{..} =
-        Map.insertWith add (arch, key) [Entry bcKey name (digits ver) size] m
-      where
-        add new old = take n . nub . sort $ new <> old
-
-        size = fromIntegral bcSize
-
-        (arch, ver)
-            | Just x <- "amd64" `Text.stripSuffix` suf = (Amd64, x)
-            | Just x <- "i386"  `Text.stripSuffix` suf = (I386,  x)
-            | otherwise                                = (Other, suf)
-
-        (key, suf) = Text.break isDigit $ stripSuffix debExt name
-
-        name = last $ Text.split (== '/') bcKey
-
-        digits = filter (not . Text.null)
-            . map (Text.filter isDigit)
-            . Text.split delim
-
-        delim = flip elem "_.\\+~"
+    aws = hoist $ either throwM return <=< (`runEnv` undefined)
 
 chunked :: Monad m => Int -> Conduit a m [a]
 chunked n = go []
@@ -187,29 +134,3 @@ chunked n = go []
             Just x | length xs < (n - 1) -> go (x : xs)
             Just x                       -> yield (x : xs) >> go []
             Nothing                      -> void (yield xs)
-
-forward :: Options -> Env -> Manager -> Request -> Entry -> AWS ()
-forward Options{..} env man rq Entry{..} = do
-    say logKey "Retrieving from {}" [optBucket]
-    (bdy, f) <- send (GetObject optBucket encodedKey []) >>=
-        unwrapResumable . responseBody
-
-    let fwd = rq { requestBody = requestBodySourceIO entrySize (hoist aws bdy)
-                 , method      = "POST"
-                 }
-
-    say logKey "Forwarding to {}" [optAddress]
-    rs <- http fwd man `finally` f
-
-    say logKey "Status {}" [status rs]
-    responseBody rs $$+- return ()
-  where
-    aws = either throwM return <=< (`runEnv` env)
-
-    status = Text.pack . show . statusCode . responseStatus
-    logKey = Text.drop 1 $ Text.dropWhile (/= '/') entryKey
-
-    encodedKey = Text.decodeUtf8
-        . urlEncode True
-        . Text.encodeUtf8
-        $ stripPrefix "/" entryKey

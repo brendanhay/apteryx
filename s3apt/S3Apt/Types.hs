@@ -1,5 +1,7 @@
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 -- Module      : S3Apt.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -13,6 +15,7 @@
 
 module S3Apt.Types where
 
+import           Control.Arrow
 import           Control.Exception
 import           Crypto.Hash
 import           Data.ByteString            (ByteString)
@@ -21,8 +24,29 @@ import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Byteable
 import           Data.Int
 import           Data.Map.Strict            (Map)
+import           Data.Monoid
+import           Data.Ord
 import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import           Data.Text.Buildable
+import qualified Filesystem.Path.CurrentOS  as Path
 import           Network.AWS
+
+debExt :: Text
+debExt = ".deb"
+
+type Path = Path.FilePath
+
+data Error
+    = ShellError   Int String LBS.ByteString
+    | MissingField Text
+    | InvalidField Text
+    | Exception    SomeException
+      deriving (Show)
+
+instance ToError Error where
+    toError (Exception ex) = toError ex
+    toError e              = toError (show e)
 
 data Arch
     = Amd64
@@ -41,14 +65,13 @@ archFromBS "i386"  = I386
 archFromBS _       = Other
 
 newtype Size = Size Int64
-    deriving (Eq, Ord, Show, Enum, Num, Real, Integral)
+    deriving (Eq, Ord, Show, Num)
 
 instance Byteable Size where
     toBytes (Size n) = BS.pack (show n)
 
 data Control = Control
-    { ctlFilename :: !Text
-    , ctlPackage  :: !ByteString
+    { ctlPackage  :: !ByteString
     , ctlVersion  :: !ByteString
     , ctlArch     :: !Arch
     , ctlSize     :: !Size
@@ -58,13 +81,26 @@ data Control = Control
     , ctlOptional :: Map ByteString ByteString
     } deriving (Eq, Show)
 
-data Error
-    = ShellError   Int String LBS.ByteString
-    | MissingField Text
-    | InvalidField Text
-    | Exception    SomeException
-      deriving (Show)
+data Key = Key { keyBucket :: !Text, keyPrefix :: !Text }
+    deriving (Eq, Show)
 
-instance ToError Error where
-    toError (Exception ex) = toError ex
-    toError e              = toError (show e)
+instance Buildable Key where
+    build Key{..} = build (keyBucket <> "/" <> keyPrefix)
+
+mkKey :: Text -> Key
+mkKey = uncurry Key . second f . Text.break p . f
+  where
+    f = Text.dropWhile p
+    p = (== '/')
+
+data Entry = Entry
+    { entKey     :: !Text
+    , entName    :: !Text
+    , entVersion :: [Text]
+    , entSize    :: !Int64
+    } deriving (Eq, Show)
+
+instance Ord Entry where
+    a `compare` b = f a `compare` f b
+      where
+        f Entry{..} = Down (entName, entVersion)

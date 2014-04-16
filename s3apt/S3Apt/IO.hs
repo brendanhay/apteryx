@@ -24,53 +24,41 @@ import qualified Crypto.Hash.Conduit        as Crypto
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import           Filesystem.Path.CurrentOS
-import           Options.Applicative
-import           Prelude                    hiding (FilePath)
+import qualified Filesystem.Path.CurrentOS  as Path
+import           S3Apt.Log
 import           S3Apt.Types
 import           System.Directory
 import           System.Exit
-import           System.IO                  hiding (FilePath)
+import           System.IO
 import           System.Posix.Files
 import           System.Process
 
-setBuffering :: IO ()
-setBuffering = do
-    hSetBuffering stdout LineBuffering
-    hSetBuffering stderr LineBuffering
-
-ensureExists :: FilePath -> IO ()
-ensureExists (encodeString -> dir) = do
+ensureExists :: Path -> IO ()
+ensureExists (Path.encodeString -> dir) = do
     createDirectoryIfMissing True dir
     -- Ensure any permission errors are caught.
     p <- doesDirectoryExist dir
     unless p $ hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
 
-parseOptions :: Parser a -> IO a
-parseOptions p = customExecParser
-    (prefs showHelpOnError)
-    (info (helper <*> p) fullDesc)
-
-getFileSize :: MonadIO m => FilePath -> EitherT Error m Size
+getFileSize :: MonadIO m => Path -> EitherT Error m Size
 getFileSize = catchError
     . fmap (fromIntegral . fileSize)
     . getFileStatus
-    . encodeString
+    . Path.encodeString
 
 hashFile :: (MonadIO m, HashAlgorithm a)
-         => FilePath
+         => Path
          -> EitherT Error m (Digest a)
-hashFile = catchError . Crypto.hashFile . encodeString
+hashFile = catchError . Crypto.hashFile . Path.encodeString
 
 withTempFile :: MonadIO m
-             => FilePath
+             => Path
              -> String
-             -> (FilePath -> Handle -> EitherT Error m a)
+             -> (Path -> Handle -> EitherT Error m a)
              -> EitherT Error m a
 withTempFile dir tmpl f = do
-    (path, hd) <- catchError $ openTempFile (encodeString dir) tmpl
-    f (decodeString path) hd `catchT`
+    (path, hd) <- catchError $ openTempFile (Path.encodeString dir) tmpl
+    f (Path.decodeString path) hd `catchT`
         \e -> catchError (removeFile path) >> left e
 
 runShell :: MonadIO m => String -> EitherT Error m ByteString
@@ -98,14 +86,15 @@ runShell cmd = do
         , std_err = CreatePipe
         }
 
-textOption :: Mod OptionFields String -> Parser Text
-textOption = fmap Text.pack . strOption
-
-pathOption :: Mod OptionFields String -> Parser FilePath
-pathOption = fmap decodeString . strOption
-
-debExt :: Text
-debExt = ".deb"
+runMain :: Show e => Text -> IO (Either e a) -> IO ()
+runMain name m = do
+    hSetBuffering stdout LineBuffering
+    hSetBuffering stderr LineBuffering
+    say_ name "Starting..."
+    exit <- m
+    either (\ex -> hPrint stderr ex >> exitFailure)
+           (const $ say_ name "Completed." >> exitSuccess)
+           exit
 
 catchError :: MonadIO m => IO a -> EitherT Error m a
 catchError = EitherT
