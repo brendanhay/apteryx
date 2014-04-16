@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- Module      : S3Apt.Options
+-- Module      : System.APT.Options
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
 -- License     : This Source Code Form is subject to the terms of
 --               the Mozilla Public License, v. 2.0.
@@ -10,14 +10,14 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 
-module S3Apt.Options where
+module System.APT.Options where
 
 import           Data.Monoid
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Filesystem.Path.CurrentOS as Path
 import           Options.Applicative
-import           S3Apt.Types
+import           System.APT.Types
 
 parseOptions :: Parser a -> IO a
 parseOptions p = customExecParser

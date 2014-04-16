@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 
--- Module      : S3Apt.IO
+-- Module      : System.APT.IO
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
 -- License     : This Source Code Form is subject to the terms of
 --               the Mozilla Public License, v. 2.0.
@@ -11,7 +11,7 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 
-module S3Apt.IO where
+module System.APT.IO where
 
 import           Control.Concurrent.Async
 import           Control.DeepSeq
@@ -25,8 +25,8 @@ import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Text                  (Text)
 import qualified Filesystem.Path.CurrentOS  as Path
-import           S3Apt.Log
-import           S3Apt.Types
+import           System.APT.Log
+import           System.APT.Types
 import           System.Directory
 import           System.Exit
 import           System.IO

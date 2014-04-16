@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- Module      : S3Apt.Package
+-- Module      : System.APT.Package
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
 -- License     : This Source Code Form is subject to the terms of
 --               the Mozilla Public License, v. 2.0.
@@ -10,7 +10,7 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 
-module S3Apt.Package
+module System.APT.Package
     ( loadControl
     ) where
 
@@ -32,8 +32,8 @@ import qualified Data.Map.Strict                  as Map
 import qualified Data.Text                        as Text
 import qualified Data.Text.Encoding               as Text
 import qualified Filesystem.Path.CurrentOS        as Path
-import           S3Apt.IO
-import           S3Apt.Types
+import           System.APT.IO
+import           System.APT.Types
 import           System.IO                        (hClose)
 
 loadControl :: MonadIO m

@@ -15,24 +15,28 @@
 module Main (main) where
 
 import           Control.Applicative
+import           Control.Concurrent.Async   (waitCatch)
+import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch
+import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Data.Conduit
-import qualified Data.Conduit.List    as Conduit
+import           Data.Either
+import           Data.Maybe
 import           Data.Monoid
-import           Data.Text            (Text)
-import qualified Data.Text            as Text
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
 import           Options.Applicative
-import           S3Apt.IO
-import           S3Apt.Log
-import           S3Apt.Options
-import           S3Apt.Package
-import           S3Apt.S3
-import           S3Apt.Types
+import           APT.IO
+import           APT.Log
+import           APT.Options
+import           APT.Package
+import           APT.S3
+import           APT.Types
 import           System.Environment
 
 data Options = Options
@@ -100,22 +104,35 @@ main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
     name          <- Text.pack <$> getProgName
+    q             <- atomically newTQueue
     runMain name . runAWS AuthDiscover optDebug $ do
-        xs <- contents name optFrom optVersions
-        Conduit.sourceList xs
-            $= chunked optN
-            $= Conduit.mapM (mapM (async . build o))
-            $= Conduit.concatMapM (mapM wait)
-            $$ Conduit.sinkNull
+        contents name optFrom optVersions >>=
+            mapM_ (liftIO . atomically . writeTQueue q)
+        ws <- mapM (\n -> async $ worker n o q) [1..optN]
+        rs <- mapM (liftIO . waitCatch) ws
+        maybe (return ()) hoistError (listToMaybe $ rights rs)
+
+worker :: Int -> Options -> TQueue Entry -> AWS ()
+worker n o q = say_ name "Starting..." >> go
+  where
+    go = do
+        mx <- liftIO . atomically $ tryReadTQueue q
+        maybe (say_ name "Exiting {}...")
+              (\x -> build o x >> go)
+              mx
+
+    name = "worker " <> Text.pack (show n)
 
 build :: Options -> Entry -> AWS ()
 build Options{..} Entry{..} = do
     say name "Retrieving {}" [from]
-    rs       <- send $ GetObject (keyBucket from) (keyPrefix from) []
+    rs   <- send $ GetObject (keyBucket from) (keyPrefix from) []
     (bdy, f) <- unwrapResumable (responseBody rs)
+
     say name "Parsing control from {}" [from]
-    ctl      <- liftEitherT (loadControl optTemp (aws bdy)) `finally` f
-    code     <- status <$> copy name from ctl optTo
+    ctl  <- liftEitherT (loadControl optTemp (aws bdy)) `finally` f
+
+    code <- status <$> copy name from ctl optTo
     say name "Completed {}" [code]
   where
     from = Key (keyBucket optFrom) entKey
@@ -124,13 +141,3 @@ build Options{..} Entry{..} = do
     name   = Text.drop 1 $ Text.dropWhile (/= '/') entKey
 
     aws = hoist $ either throwM return <=< (`runEnv` undefined)
-
-chunked :: Monad m => Int -> Conduit a m [a]
-chunked n = go []
-  where
-    go xs = do
-        m <- await
-        case m of
-            Just x | length xs < (n - 1) -> go (x : xs)
-            Just x                       -> yield (x : xs) >> go []
-            Nothing                      -> void (yield xs)

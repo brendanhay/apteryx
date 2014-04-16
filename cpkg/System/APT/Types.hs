@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
 
--- Module      : S3Apt.Types
+-- Module      : System.APT.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
 -- License     : This Source Code Form is subject to the terms of
 --               the Mozilla Public License, v. 2.0.
@@ -13,7 +13,7 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 
-module S3Apt.Types where
+module System.APT.Types where
 
 import           Control.Arrow
 import           Control.Exception
@@ -29,8 +29,10 @@ import           Data.Ord
 import           Data.Text                  (Text)
 import qualified Data.Text                  as Text
 import           Data.Text.Buildable
+import qualified Data.Text.Encoding         as Text
 import qualified Filesystem.Path.CurrentOS  as Path
 import           Network.AWS
+import           Network.HTTP.Types
 
 debExt :: Text
 debExt = ".deb"
@@ -81,11 +83,20 @@ data Control = Control
     , ctlOptional :: Map ByteString ByteString
     } deriving (Eq, Show)
 
-data Key = Key { keyBucket :: !Text, keyPrefix :: !Text }
+data Key = Key !Text !Text
     deriving (Eq, Show)
 
+keyBucket :: Key -> Text
+keyBucket (Key b _) = b
+
+keyPrefix :: Key -> Text
+keyPrefix (Key _ k) = Text.decodeUtf8
+    . BS.intercalate "/"
+    . map (urlEncode True . Text.encodeUtf8)
+    $ Text.split (== '/') k
+
 instance Buildable Key where
-    build Key{..} = build (keyBucket <> "/" <> keyPrefix)
+    build k = build (keyBucket k <> "/" <> keyPrefix k)
 
 mkKey :: Text -> Key
 mkKey = uncurry Key . second f . Text.break p . f
