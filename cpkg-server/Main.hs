@@ -34,11 +34,11 @@ import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error)
 import           Network.Wai.Routing         hiding (options)
 import           Prelude                     hiding (FilePath, head)
-import           APT.IO
-import           APT.Package
-import           APT.Server.App
-import           APT.Server.Options
-import           APT.Types
+import           System.APT.IO
+import           System.APT.Package
+import           System.APT.Server.App
+import           System.APT.Server.Options
+import           System.APT.Types
 import qualified System.Logger               as Log
 import           System.LoggerT              (msg, (+++), field)
 import qualified System.LoggerT              as LogT

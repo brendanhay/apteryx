@@ -31,12 +31,12 @@ import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
 import           Options.Applicative
-import           APT.IO
-import           APT.Log
-import           APT.Options
-import           APT.Package
-import           APT.S3
-import           APT.Types
+import           System.APT.IO
+import           System.APT.Log
+import           System.APT.Options
+import           System.APT.Package
+import           Network.APT.S3
+import           System.APT.Types
 import           System.Environment
 
 data Options = Options

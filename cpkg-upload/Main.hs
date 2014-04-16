@@ -21,11 +21,11 @@ import qualified Data.Text                 as Text
 import qualified Filesystem.Path.CurrentOS as Path
 import           Network.AWS
 import           Options.Applicative
-import           APT.IO
-import           APT.Options
-import           APT.Package
-import           APT.S3
-import           APT.Types
+import           System.APT.IO
+import           System.APT.Options
+import           System.APT.Package
+import           Network.APT.S3
+import           System.APT.Types
 import           System.Environment
 import           System.IO
 
