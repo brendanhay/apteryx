@@ -67,7 +67,6 @@ options :: Parser Options
 options = Options
     <$> strOption
          ( long "host"
-        <> short 'h'
         <> metavar "HOST"
         <> help "Hostname or address to bind on. [default: 127.0.0.1]"
         <> value "127.0.0.1"
@@ -89,8 +88,7 @@ options = Options
          )
 
     <*> pathOption
-         ( long "tmp"
-        <> short 't'
+         ( long "dir"
         <> metavar "PATH"
         <> help "Directory to serve the generated Packages index from. [default: ./www]"
         <> value "www"

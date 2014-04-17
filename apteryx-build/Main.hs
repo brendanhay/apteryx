@@ -97,8 +97,8 @@ options = Options
         <> help "Print debug output."
          )
 
--- FIXME: Add verification to the build process?
--- Number of versions is correct, metadata can be loaded
+-- FIXME: Add verification to the build process
+-- Ensure number of versions is correct, metadata can be loaded
 
 main :: IO ()
 main = do
