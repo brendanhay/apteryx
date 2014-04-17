@@ -2,4 +2,8 @@ Package: apteryx
 Version: <<VERSION_NUMBER>>+<<BUILD_NUMBER>>
 Maintainer: Brendan Hay <brendan.g.hay@gmail.com>
 Architecture: amd64
+Depends: runit
 Description: Debian Packaging Tools
+ Installs apteryx-upload, apteryx-rebuild, and apteryx-server.
+ The service contains a runit service description,
+ which is not started by default.
