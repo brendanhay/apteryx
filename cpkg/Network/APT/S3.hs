@@ -14,14 +14,13 @@
 -- Portability : non-portable (GHC extensions)
 
 module Network.APT.S3
-    ( contents
+    ( entries
     , copy
     , upload
+    , metadata
     ) where
 
 import           Control.Error
-import           Data.ByteString           (ByteString)
-import qualified Data.ByteString.Base64    as Base64
 import           Data.Byteable
 import           Data.Char                 (isDigit)
 import           Data.Conduit
@@ -37,13 +36,14 @@ import qualified Data.Text.Lazy            as LText
 import qualified Data.Text.Lazy.Builder    as LText
 import qualified Filesystem.Path.CurrentOS as Path
 import           Network.AWS.S3            hiding (Bucket)
-import           Network.HTTP.Types
+import           Network.HTTP.Conduit
 import           System.APT.Log
+import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
 -- FIXME: pulls all of a bucket's keys into memory.
-contents :: Text -> Key -> Int -> AWS [Entry]
-contents name key n = do
+entries :: Text -> Key -> Int -> AWS [Entry]
+entries name key n = do
     say name "Paginating contents of {}" [key]
     paginate (GetBucket (keyBucket key) (Delimiter '/') prefix 200 Nothing)
         $= Conduit.concatMap (filter match . gbrContents)
@@ -92,7 +92,7 @@ copy name from c@Control{..} to = do
         , pocKey       = keyPrefix dest
         , pocSource    = src
         , pocDirective = Replace
-        , pocHeaders   = metadata c
+        , pocHeaders   = Pkg.toHeaders c
         }
   where
     dest = destination to c
@@ -106,31 +106,21 @@ upload name key c@Control{..} (Path.encodeString -> path) = do
     send_ PutObject
         { poBucket  = keyBucket dest
         , poKey     = keyPrefix dest
-        , poHeaders = metadata c
+        , poHeaders = Pkg.toHeaders c
         , poBody    = bdy
         }
   where
     dest = destination key c
 
-metadata :: Control -> [Header]
-metadata Control{..} =
-    [ ("Content-MD5",  md5)
-    , ("Content-Type", "application/x-deb")
-    ] ++ [ "Package"      =@ ctlPackage
-         , "Version"      =@ ctlVersion
-         , "Architecture" =@ toBytes ctlArch
-         , "Size"         =@ toBytes ctlSize
-         , "MD5"          =@ md5
-         , "SHA1"         =@ base64 ctlSHA1
-         , "SHA256"       =@ base64 ctlSHA256
-         ]
-  where
-    (=@) k = ("x-amz-meta-" <> k,)
-
-    md5 = base64 ctlMD5Sum
-
-    base64 :: Byteable a => a -> ByteString
-    base64 = Base64.encode . toBytes
+metadata :: Text -> Key -> AWS Control
+metadata name key = do
+    say name "Querying {}" [key]
+    hoistError . fmapL toError . Pkg.fromHeaders . responseHeaders
+        =<< send HeadObject
+            { hoBucket  = keyBucket key
+            , hoKey     = keyPrefix key
+            , hoHeaders = []
+            }
 
 destination :: Key -> Control -> Key
 destination (Key b k) Control{..} = Key b $ Text.concat

@@ -7,7 +7,7 @@ DEPS  := vendor/amazonka vendor/tinylog
 all: deps build link
 
 link:
-	$(foreach dir, $(wildcard s3apt-*),ln -fs dist/build/$(dir)/$(dir) $(dir:s3apt-%=%);)
+	$(foreach dir, $(wildcard cpkg-*),ln -fs dist/build/$(dir)/$(dir) $(dir:cpkg-%=%);)
 
 clean:
 	-rm -rf dist cabal.sandbox.config .cabal-sandbox $(OUT)

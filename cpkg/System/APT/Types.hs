@@ -22,6 +22,7 @@ import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import           Data.Byteable
+import           Data.CaseInsensitive       (CI)
 import           Data.Int
 import           Data.Map.Strict            (Map)
 import           Data.Monoid
@@ -80,7 +81,7 @@ data Control = Control
     , ctlMD5Sum   :: !(Digest MD5)
     , ctlSHA1     :: !(Digest SHA1)
     , ctlSHA256   :: !(Digest SHA256)
-    , ctlOptional :: Map ByteString ByteString
+    , ctlOptional :: Map (CI ByteString) ByteString
     } deriving (Eq, Show)
 
 data Key = Key !Text !Text

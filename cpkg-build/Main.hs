@@ -15,18 +15,16 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Control.Concurrent.Async   (waitCatch)
 import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Data.Conduit
-import           Data.Either
-import           Data.Maybe
 import           Data.Monoid
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
+import           Data.Text                (Text)
+import qualified Data.Text                as Text
+import qualified Network.APT.S3           as S3
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
@@ -34,8 +32,7 @@ import           Options.Applicative
 import           System.APT.IO
 import           System.APT.Log
 import           System.APT.Options
-import           System.APT.Package
-import           Network.APT.S3
+import qualified System.APT.Package       as Pkg
 import           System.APT.Types
 import           System.Environment
 
@@ -90,7 +87,7 @@ options = Options
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
-        <> help "Maximum number of most recent package versions to store. [default: 3]"
+        <> help "Maximum number of most recent package versions to retain. [default: 3]"
         <> value 3
          )
 
@@ -100,28 +97,34 @@ options = Options
         <> help "Print debug output."
          )
 
+-- FIXME: Add verification to the build process?
+-- Number of versions is correct, metadata can be loaded
+
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
     name          <- Text.pack <$> getProgName
-    q             <- atomically newTQueue
-    runMain name . runAWS AuthDiscover optDebug $ do
-        contents name optFrom optVersions >>=
-            mapM_ (liftIO . atomically . writeTQueue q)
-        ws <- mapM (\n -> async $ worker n o q) [1..optN]
-        rs <- mapM (liftIO . waitCatch) ws
-        maybe (return ()) hoistError (listToMaybe $ rights rs)
+    queue         <- atomically newTQueue
 
-worker :: Int -> Options -> TQueue Entry -> AWS ()
+    let num   = [1..optN]
+        write = liftIO . atomically . writeTQueue queue
+
+    runMain name . runAWS AuthDiscover optDebug $ do
+        S3.entries name optFrom optVersions >>= mapM_ (write . Just)
+        ws <- mapM (\n -> async $ worker n o queue) num
+        mapM_ write (map (const Nothing) num)
+        mapM_ wait ws
+
+worker :: Int -> Options -> TQueue (Maybe Entry) -> AWS ()
 worker n o q = say_ name "Starting..." >> go
   where
+    name = "worker " <> Text.pack (show n)
+
     go = do
-        mx <- liftIO . atomically $ tryReadTQueue q
-        maybe (say_ name "Exiting {}...")
+        mx <- liftIO . atomically $ readTQueue q
+        maybe (say_ name "No more entries, exiting...")
               (\x -> build o x >> go)
               mx
-
-    name = "worker " <> Text.pack (show n)
 
 build :: Options -> Entry -> AWS ()
 build Options{..} Entry{..} = do
@@ -130,9 +133,9 @@ build Options{..} Entry{..} = do
     (bdy, f) <- unwrapResumable (responseBody rs)
 
     say name "Parsing control from {}" [from]
-    ctl  <- liftEitherT (loadControl optTemp (aws bdy)) `finally` f
+    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws bdy)) `finally` f
 
-    code <- status <$> copy name from ctl optTo
+    code <- status <$> S3.copy name from ctl optTo
     say name "Completed {}" [code]
   where
     from = Key (keyBucket optFrom) entKey

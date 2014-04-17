@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TypeOperators              #-}
@@ -19,28 +21,35 @@
 
 module Main (main) where
 
-import           Control.Error
+import           Control.Applicative
 import           Control.Monad
-import           Control.Monad.Catch         (finally)
+import           Control.Monad.Catch         hiding (Handler)
+import           Control.Monad.IO.Class
+import           Control.Monad.Reader
+import           Control.Monad.Trans.Either
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
+import           Data.Maybe
+import           Data.Monoid
 import           Data.String
-import           Filesystem.Path.CurrentOS   hiding (empty)
+import           Data.Text                   (Text)
+import qualified Data.Text.Encoding          as Text
+import           Data.Word
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error)
 import           Network.Wai.Routing         hiding (options)
-import           Prelude                     hiding (FilePath, head)
+import           Options.Applicative
+import           Prelude                     hiding (head)
 import           System.APT.IO
+import           System.APT.Options
 import           System.APT.Package
-import           System.APT.Server.App
-import           System.APT.Server.Options
 import           System.APT.Types
 import qualified System.Logger               as Log
-import           System.LoggerT              (msg, (+++), field)
+import           System.LoggerT
 import qualified System.LoggerT              as LogT
 
 default (ByteString)
@@ -49,7 +58,7 @@ data Options = Options
     { optHost     :: !String
     , optPort     :: !Word16
     , optKey      :: !Key
-    , optIncoming :: !FilePath
+    , optWWW      :: !Path
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
@@ -60,15 +69,15 @@ options = Options
          ( long "host"
         <> short 'h'
         <> metavar "HOST"
-        <> help "Hostname or address to bind on."
-        <> value "0.0.0.0"
+        <> help "Hostname or address to bind on. [default: 127.0.0.1]"
+        <> value "127.0.0.1"
          )
 
     <*> option
          ( long "port"
         <> short 'p'
         <> metavar "PORT"
-        <> help "Port number to listen on. default: 8080"
+        <> help "Port number to listen on. [default: 8080]"
         <> value 8080
          )
 
@@ -76,14 +85,22 @@ options = Options
          ( long "key"
         <> short 'k'
         <> metavar "BUCKET/PREFIX"
-        <> help "S3 bucket to store packages in."
+        <> help "Source S3 bucket and optional prefix to traverse for packages. [required]"
+         )
+
+    <*> pathOption
+         ( long "tmp"
+        <> short 't'
+        <> metavar "PATH"
+        <> help "Directory to serve the generated Packages index from. [default: ./www]"
+        <> value "www"
          )
 
     <*> option
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
-        <> help "Number versions to allow in the package index. default: 3"
+        <> help "Maximum number of most recent package versions to retain. [default: 3]"
         <> value 3
          )
 
@@ -98,6 +115,13 @@ data Env = Env
     , appLogger  :: !Logger
     }
 
+-- FIXME: expose runEnv in amazonka and related auth/credentials
+newEnv :: Options -> IO Env
+newEnv opts = Env opts <$> Log.new Log.defSettings
+
+closeEnv :: Env -> IO ()
+closeEnv = Log.close . appLogger
+
 newtype App a = App (ReaderT Env IO a)
     deriving ( Functor
              , Applicative
@@ -107,6 +131,9 @@ newtype App a = App (ReaderT Env IO a)
              , MonadCatch
              , MonadReader Env
              )
+
+runApp :: Env -> App a -> IO a
+runApp e (App a) = runReaderT a e
 
 instance MonadLogger App where
     logger = asks appLogger
@@ -129,6 +156,9 @@ instance MonadLogger (EitherT e App) where
 --         uninterruptibleMask $ \u -> runEitherT (a $ mapEitherT u)
 
 type Handler = EitherT Error App Response
+
+runHandler :: Env -> Handler -> IO Response
+runHandler e h = runApp e (eitherT onError return h)
 
 main :: IO ()
 main = parseOptions options >>= serve
@@ -154,76 +184,66 @@ serve o@Options{..} = do
 
     logException l _ x = Log.err l $ msg (BS.pack $ show x)
 
-    serverError = setStatus status500 (plain "server-error")
+    serverError = responseLBS status500 [] "server-error"
 
 routes :: Options -> Routes a (EitherT Error App) ()
-routes Options{..} = do
-    renderer (return . LBS.fromStrict . fromMaybe "N/A" . message)
+routes opts = do
+--    renderer (return . LBS.fromStrict . fromMaybe "N/A" . message)
 
-    get  "/i/status" (const $ return empty) true
-    head "/i/status" (const $ return empty) true
+    post "/packages/:arch/:name/:vers" reindex $
+             capture "arch"
+         .&. capture "name"
+         .&. capture "vers"
 
-    get  "/packages" packages request
-    post "/packages" (upload optIncoming) $
-        accept "application" "x-deb" .&. request
+    -- post  "/packages" (const rebuild) true
 
-packages :: Request -> Handler
-packages _ = return $ responseLBS status200 [] ""
+    -- post  "/packages" (const $ return blank) true
 
-upload :: FilePath -> Media "application" "x-deb" ::: Request -> Handler
-upload tmp (_ ::: rq) = do
-    c@Control{..} <- receive tmp (requestBody rq)
-    LogT.debug $ field "uploaded" (show c)
+    -- get   "/:arch/:package/:version" (const $ return blank) true
+  -- where
+  --   patch = addRoute "PATCH"
 
-    put to s3
+    -- get   "/i/status" (const $ return blank) true
+    -- head  "/i/status" (const $ return blank) true
 
-    return . addHeader "Location" ctlPackage
-           $ responseLBS status201 [] (LBS.pack $ show c)
+reindex :: Text ::: Text ::: Text -> Handler
+reindex (arch ::: name ::: vers) = do
+    LogT.debug $ field "reindexing" (arch +++ "/" +++ name +++ "/" +++ vers)
+    
 
--- FIXME: expose runEnv in amazonka and related auth/credentials
-newEnv :: Options -> IO Env
-newEnv opts = Env opts <$> Log.new Log.defSettings
+    return blank
 
-closeEnv :: Env -> IO ()
-closeEnv = Log.close . appLogger
+-- rebuild :: Handler
+-- rebuild = return blank
 
-runApp :: Env -> App a -> IO a
-runApp e (App a) = runReaderT a e
+-- packages :: Request -> Handler
+-- packages _ = return blank
 
-runHandler :: Env -> Handler -> IO Response
-runHandler e h = runApp e (eitherT onError return h)
+-- upload :: Options -> Media "application" "x-deb" ::: Request -> Handler
+-- upload Options{..} (_ ::: rq) = do
+--     -- c@Control{..} <- receive tmp (requestBody rq)
+--     -- LogT.debug $ field "uploaded" (show c)
+
+--     -- put to s3
+--     undefined
+-- --    return $ responseLBS status201 [("Location", ctlPackage)] (LBS.pack $ show c)
+
+blank :: Response
+blank = responseLBS status200 [] ""
 
 onError :: Error -> App Response
 onError e = case statusCode code of
     c | c >= 500  -> LogT.err errField
       | c >= 400  -> LogT.debug errField
       | otherwise -> return ()
-    >> return (setStatus code . plain $ LBS.fromStrict lbl)
+    >> return (responseLBS code [] $ LBS.fromStrict lbl)
   where
     errField = field lbl ("\"" +++ line +++ "\"")
 
     (code, lbl, line) = case e of
-        MissingField m   -> (status400, "invalid-package", encode m)
-        InvalidField m   -> (status400, "invalid-package", encode m)
+        MissingField m   -> (status409, "invalid-package", encode m)
+        InvalidField m   -> (status413, "invalid-package", encode m)
         ShellError _ _ m -> (status500, "invalid-package", m)
         Exception ex     -> (status500, "server-error",    LBS.pack $ show ex)
 
     encode = LBS.fromStrict . Text.encodeUtf8
-
-empty :: Response
-empty = plain ""
-
-plain :: LBS.ByteString -> Response
-plain = responseLBS status200 []
-
--- setStatus :: Status -> Response -> Response
--- setStatus s (ResponseBuilder _ h b) = ResponseBuilder s h b
--- setStatus s (ResponseSource _ h x)  = ResponseSource s h x
--- setStatus s (ResponseFile _ h f ff) = ResponseFile s h f ff
--- setStatus s (ResponseRaw x r)       = ResponseRaw x (setStatus s r)
-
--- addHeader :: HeaderName -> ByteString -> Response -> Response
--- addHeader k v (ResponseFile s h f ff) = ResponseFile s ((k, v):h) f ff
--- addHeader k v (ResponseBuilder s h b) = ResponseBuilder s ((k, v):h) b
--- addHeader k v (ResponseSource s h x)  = ResponseSource s ((k, v):h) x
--- addHeader k v (ResponseRaw s r)       = ResponseRaw s (addHeader k v r)

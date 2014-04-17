@@ -88,8 +88,6 @@ runShell cmd = do
 
 runMain :: Show e => Text -> IO (Either e a) -> IO ()
 runMain name m = do
-    hSetBuffering stdout LineBuffering
-    hSetBuffering stderr LineBuffering
     say_ name "Starting..."
     exit <- m
     either (\ex -> hPrint stderr ex >> exitFailure)

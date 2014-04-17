@@ -19,12 +19,12 @@ import           Data.Monoid
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Filesystem.Path.CurrentOS as Path
-import           Network.AWS
+import qualified Network.APT.S3            as S3
+import           Network.AWS.S3
 import           Options.Applicative
 import           System.APT.IO
 import           System.APT.Options
-import           System.APT.Package
-import           Network.APT.S3
+import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 import           System.Environment
 import           System.IO
@@ -65,7 +65,7 @@ options = Options
          $ long "addr"
         <> short 'a'
         <> metavar "ADDR"
-        <> help "Server to notify with new package description. [default: none]"
+        <> help "Server to notify with the new package description. [default: none]"
          )
 
     <*> switch
@@ -81,6 +81,6 @@ main = do
     runMain name . withFile (Path.encodeString optFile) ReadMode $ \hd -> do
         runAWS AuthDiscover optDebug $ do
             c@Control{..} <- liftEitherT
-               $ loadControl optTemp (Conduit.sourceHandle hd)
+               $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
               <* liftIO (hClose hd)
-            upload name optKey c optFile
+            S3.upload name optKey c optFile

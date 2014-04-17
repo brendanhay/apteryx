@@ -53,6 +53,7 @@ library
         , deepseq
         , directory
         , errors
+        , http-conduit
         , http-types
         , optparse-applicative
         , process
@@ -61,6 +62,60 @@ library
         , text-format
         , transformers
         , unix
+
+executable cpkg-build
+    main-is:            Main.hs
+    hs-source-dirs:     cpkg-build
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-N
+        -with-rtsopts=-T
+        -funbox-strict-fields
+
+    build-depends:
+          amazonka
+        , base
+        , conduit
+        , exceptions
+        , http-conduit
+        , http-types
+        , mmorph
+        , optparse-applicative
+        , cpkg
+        , stm
+        , text
+        , transformers
+
+executable cpkg-server
+    main-is:            Main.hs
+    hs-source-dirs:     cpkg-server
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-N
+        -with-rtsopts=-T
+        -funbox-strict-fields
+
+    build-depends:
+          base
+        , bytestring
+        , either
+        , exceptions
+        , http-types
+        , mtl
+        , optparse-applicative
+        , cpkg
+        , text
+        , tinylog
+        , transformers
+        , wai
+        , wai-extra
+        , wai-predicates       >= 0.4
+        , wai-routing
+        , warp
 
 executable cpkg-upload
     main-is:            Main.hs
@@ -82,58 +137,3 @@ executable cpkg-upload
         , system-filepath
         , text
         , transformers
-
-executable cpkg-build
-    main-is:            Main.hs
-    hs-source-dirs:     cpkg-build
-    default-language:   Haskell2010
-    ghc-options:
-        -threaded
-        -Wall
-        -with-rtsopts=-N
-        -with-rtsopts=-T
-        -funbox-strict-fields
-
-    build-depends:
-          amazonka
-        , async
-        , base
-        , conduit
-        , exceptions
-        , http-conduit
-        , http-types
-        , mmorph
-        , optparse-applicative
-        , cpkg
-        , stm
-        , text
-        , transformers
-
--- executable cpkg-server
---     main-is:            Main.hs
---     hs-source-dirs:     cpkg-server
---     default-language:   Haskell2010
---     ghc-options:
---         -threaded
---         -Wall
---         -with-rtsopts=-N
---         -with-rtsopts=-T
---         -funbox-strict-fields
-
---     build-depends:
---           base
---         , bytestring
---         , errors
---         , exceptions
---         , http-types
---         , mtl
---         , optparse-applicative
---         , cpkg
---         , system-filepath
---         , text
---         , tinylog
---         , wai
---         , wai-extra
---         , wai-predicates       >= 0.4
---         , wai-routing
---         , warp
