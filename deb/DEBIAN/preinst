@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -e
+
+app=apteryx-server
+
+if [ -L "/etc/service/$app" ]
+    sv down $app
+fi

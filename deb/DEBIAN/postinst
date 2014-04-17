@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -e
+
+app=apteryx-server
+
+deny=(/var/log/$APP /etc/sv/$APP/log/main)
+allow=(/etc/$APP /opt/$APP /var/www/$APP)
+
+mkdir -p ${deny[@]}
+mkdir -p ${allow[@]}
+
+chown -R www-data:www-data ${allow[@]}

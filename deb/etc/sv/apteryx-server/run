@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -e
+
+exec 2>&1
+
+app=apteryx-server
+
+export HOME=/opt/$app
+
+cd $HOME
+
+exec chpst -e /etc/$app -u www-data $HOME/bin/$app \
+    --host ${APTERYX_HOST:=127.0.0.1} \
+    --port ${APTERYX_PORT:=8080} \
+    --key ${APTERYX_KEY:?"Need to set APTERYX_KEY in $config/.env"} \
+    --tmp ${APTERYX_DIR:?"Need to set APTERYX_DIR in $config/.env"} \
+    --version ${APTERYX_VERSIONS:=3}
