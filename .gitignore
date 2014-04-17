@@ -14,11 +14,11 @@ cabal.sandbox.config
 .cabal-sandbox
 
 # Dirs
-dist
-tmp
-log
-vendor
-incoming
+/dist
+/tmp
+/log
+/vendor
+/www
 
 # CTAGS
 TAGS
