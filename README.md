@@ -1,6 +1,6 @@
 # Apteryx
 
-Clo{ud,wn} Packaging - S3 APT Server and Tools
+Clo{ud,wn} Packaging - S3 backed server for Debian binary packages and related tooling.
 
 ## Table of Contents
 
