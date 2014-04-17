@@ -1,1 +1,1 @@
-web: ./server --host CPKG_WEB_HOST -p $PORT
+web: ./server --host APTERYX_WEB_HOST -p $PORT
