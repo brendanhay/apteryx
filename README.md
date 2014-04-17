@@ -1,4 +1,4 @@
-# cpkg
+# Apteryx
 
 Clo{ud,wn} Packaging - S3 APT Server and Tools
 
@@ -15,9 +15,9 @@ Clo{ud,wn} Packaging - S3 APT Server and Tools
 
 ## Contribute
 
-For any problems, comments or feedback please create an issue [here on GitHub](github.com/brendanhay/cpkg/issues).
+For any problems, comments or feedback please create an issue [here on GitHub](github.com/brendanhay/apteryx/issues).
 
 
 ## Licence
 
-cpkg is released under the [Mozilla Public License Version 2.0](http://www.mozilla.org/MPL/)
+Apteryx is released under the [Mozilla Public License Version 2.0](http://www.mozilla.org/MPL/)
