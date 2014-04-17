@@ -84,3 +84,5 @@ main = do
                $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
               <* liftIO (hClose hd)
             S3.upload name optKey c optFile
+
+--Post to server

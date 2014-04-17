@@ -15,25 +15,31 @@
 
 module System.APT.Types where
 
+import           Control.Applicative
 import           Control.Arrow
 import           Control.Exception
 import           Crypto.Hash
-import           Data.ByteString            (ByteString)
-import qualified Data.ByteString.Char8      as BS
-import qualified Data.ByteString.Lazy.Char8 as LBS
+import           Data.Attoparsec.ByteString.Char8
+import           Data.ByteString                  (ByteString)
+import           Data.ByteString.Builder          (byteString)
+import qualified Data.ByteString.Char8            as BS
+import           Data.ByteString.From
+import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.Byteable
-import           Data.CaseInsensitive       (CI)
+import           Data.CaseInsensitive             (CI)
 import           Data.Int
-import           Data.Map.Strict            (Map)
+import           Data.Map.Strict                  (Map)
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
+import           Data.Text                        (Text)
+import qualified Data.Text                        as Text
 import           Data.Text.Buildable
-import qualified Data.Text.Encoding         as Text
-import qualified Filesystem.Path.CurrentOS  as Path
+import qualified Data.Text.Encoding               as Text
+import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
 import           Network.HTTP.Types
+import           System.Logger.Message            (ToBytes(..))
 
 debExt :: Text
 debExt = ".deb"
@@ -62,10 +68,14 @@ instance Byteable Arch where
     toBytes I386  = "i386"
     toBytes Other = "all"
 
+instance ToBytes Arch where
+    bytes = byteString . toBytes
+
+instance FromByteString Arch where
+    parser = (string "amd64" >> return Amd64) <|> (string "i386" >> return I386)
+
 archFromBS :: ByteString -> Arch
-archFromBS "amd64" = Amd64
-archFromBS "i386"  = I386
-archFromBS _       = Other
+archFromBS = fromMaybe Other . fromByteString
 
 newtype Size = Size Int64
     deriving (Eq, Ord, Show, Num)

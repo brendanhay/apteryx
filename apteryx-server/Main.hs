@@ -22,6 +22,7 @@
 module Main (main) where
 
 import           Control.Applicative
+import           Control.Concurrent
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
@@ -36,6 +37,7 @@ import           Data.String
 import           Data.Text                   (Text)
 import qualified Data.Text.Encoding          as Text
 import           Data.Word
+import           Network.AWS
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
@@ -110,17 +112,22 @@ options = Options
 
 data Env = Env
     { appOptions :: !Options
-    , appLogger  :: !Logger
+    , appEnv     :: AWSEnv
+    , appLogger  :: Logger
+    , appLock    :: MVar ()
     }
 
--- FIXME: expose runEnv in amazonka and related auth/credentials
 newEnv :: Options -> IO Env
-newEnv opts = Env opts <$> Log.new Log.defSettings
+newEnv opts = do
+    e <- runEitherT $ loadEnv AuthDiscover (optDebug opts)
+    Env opts <$> either error return e
+             <*> Log.new Log.defSettings
+             <*> newMVar ()
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
 
-newtype App a = App (ReaderT Env IO a)
+newtype App a = App { unApp :: ReaderT Env IO a }
     deriving ( Functor
              , Applicative
              , Monad
@@ -131,7 +138,7 @@ newtype App a = App (ReaderT Env IO a)
              )
 
 runApp :: Env -> App a -> IO a
-runApp e (App a) = runReaderT a e
+runApp env = (`runReaderT` env) . unApp
 
 instance MonadLogger App where
     logger = asks appLogger
@@ -163,11 +170,12 @@ main = parseOptions options >>= serve
 
 serve :: Options -> IO ()
 serve o@Options{..} = do
+    ensureExists optWWW
     e <- newEnv o
     runSettings (settings e) (pipeline e) `finally` closeEnv e
   where
     pipeline e = GZip.gzip GZip.def (handler e)
-    handler  e = runHandler e . route (prepare $ routes o)
+    handler  e = runHandler e . route (prepare routes)
     settings e =
           setHost (fromString optHost)
         . setPort (fromIntegral optPort)
@@ -177,54 +185,59 @@ serve o@Options{..} = do
         . setTimeout 60
         $ defaultSettings
 
-    logStart l = Log.info l . msg $
-        "Listening on " +++ optHost +++ ':' +++ optPort
+    logStart l = do
+        Log.info l $ msg "Apteryx starting..."
+        Log.info l $ msg ("Listening on " +++ optHost +++ ':' +++ optPort)
 
     logException l _ x = Log.err l $ msg (BS.pack $ show x)
 
-    serverError = responseLBS status500 [] "server-error"
+    serverError = responseLBS status500 [] "server-error\n"
 
-routes :: Options -> Routes a (EitherT Error App) ()
-routes opts = do
---    renderer (return . LBS.fromStrict . fromMaybe "N/A" . message)
+routes :: Routes a (EitherT Error App) ()
+routes = do
+    post  "/packages" (const rebuild) true
 
-    post "/packages/:arch/:name/:vers" reindex $
-             capture "arch"
-         .&. capture "name"
-         .&. capture "vers"
+--     patch "/packages/:arch/:name/:vers" reindex $
+--         capture "arch" .&. capture "name" .&. capture "vers"
 
-    -- post  "/packages" (const rebuild) true
+-- --    get   "/packages/:arch/:package" (const $ return blank) true
+--     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
 
-    -- post  "/packages" (const $ return blank) true
-
-    -- get   "/:arch/:package/:version" (const $ return blank) true
+--     get   "/i/status" (const $ return blank) true
+--     head  "/i/status" (const $ return blank) true
   -- where
   --   patch = addRoute "PATCH"
 
-    -- get   "/i/status" (const $ return blank) true
-    -- head  "/i/status" (const $ return blank) true
+-- reindex :: Arch ::: Text ::: Text -> Handler
+-- reindex (arch ::: name ::: vers) = do
+--     LogT.debug $ field "reindex" (arch +++ "/" +++ name +++ "/" +++ vers)
+--     return blank
 
-reindex :: Text ::: Text ::: Text -> Handler
-reindex (arch ::: name ::: vers) = do
-    LogT.debug $ field "reindexing" (arch +++ "/" +++ name +++ "/" +++ vers)
-    
+rebuild :: Handler
+rebuild  = do
+    p <- asks appLock >>= liftIO . isEmptyMVar
+    if p then inprogress else invoke
+  where
+    inprogress :: Handler
+    inprogress = do
+        LogT.debug $ field "rebuild" "Rebuild already in progress."
+        return (responseLBS status200 [] "rebuild-in-progress\n")
 
-    return blank
+    invoke :: Handler
+    invoke = do
+        forkWorker
+        return (responseLBS status200 [] "starting-rebuild\n")
 
--- rebuild :: Handler
--- rebuild = return blank
-
--- packages :: Request -> Handler
--- packages _ = return blank
-
--- upload :: Options -> Media "application" "x-deb" ::: Request -> Handler
--- upload Options{..} (_ ::: rq) = do
---     -- c@Control{..} <- receive tmp (requestBody rq)
---     -- LogT.debug $ field "uploaded" (show c)
-
---     -- put to s3
---     undefined
--- --    return $ responseLBS status201 [("Location", ctlPackage)] (LBS.pack $ show c)
+    forkWorker :: EitherT Error App ()
+    forkWorker = do
+        Env{..} <- ask
+        void . liftIO
+             . forkIO
+             . void
+             $ flip runEnv appEnv $ do
+                 Log.debug appLogger $ field "rebuild-worker" "Starting rebuild..."
+                 liftIO . withMVar appLock $ const (threadDelay 15000000)
+                 Log.debug appLogger $ field "rebuild-worker" "Rebuild complete."
 
 blank :: Response
 blank = responseLBS status200 [] ""
@@ -234,7 +247,7 @@ onError e = case statusCode code of
     c | c >= 500  -> LogT.err errField
       | c >= 400  -> LogT.debug errField
       | otherwise -> return ()
-    >> return (responseLBS code [] $ LBS.fromStrict lbl)
+    >> return (responseLBS code [] $ LBS.fromStrict lbl <> "\n")
   where
     errField = field lbl ("\"" +++ line +++ "\"")
 

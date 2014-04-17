@@ -37,13 +37,14 @@ library
         , System.APT.Types
 
     build-depends:
-          amazonka             >= 0.3.1
+          amazonka             >= 0.3.5
         , async
         , attoparsec
         , base                 >= 4.6 && < 5
         , base64-bytestring
         , byteable
         , bytestring           >= 0.10.4
+        , bytestring-from
         , case-insensitive
         , conduit              >= 0.1.1
         , conduit-extra
@@ -60,33 +61,34 @@ library
         , system-filepath
         , text
         , text-format
+        , tinylog
         , transformers
         , unix
 
-executable apteryx-build
-    main-is:            Main.hs
-    hs-source-dirs:     apteryx-build
-    default-language:   Haskell2010
-    ghc-options:
-        -threaded
-        -Wall
-        -with-rtsopts=-N
-        -with-rtsopts=-T
-        -funbox-strict-fields
+-- executable apteryx-build
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-build
+--     default-language:   Haskell2010
+--     ghc-options:
+--         -threaded
+--         -Wall
+--         -with-rtsopts=-N
+--         -with-rtsopts=-T
+--         -funbox-strict-fields
 
-    build-depends:
-          amazonka
-        , base
-        , conduit
-        , exceptions
-        , http-conduit
-        , http-types
-        , mmorph
-        , optparse-applicative
-        , apteryx
-        , stm
-        , text
-        , transformers
+--     build-depends:
+--           amazonka
+--         , base
+--         , conduit
+--         , exceptions
+--         , http-conduit
+--         , http-types
+--         , mmorph
+--         , optparse-applicative
+--         , apteryx
+--         , stm
+--         , text
+--         , transformers
 
 executable apteryx-server
     main-is:            Main.hs
@@ -100,7 +102,8 @@ executable apteryx-server
         -funbox-strict-fields
 
     build-depends:
-          base
+          amazonka
+        , base
         , bytestring
         , either
         , exceptions
@@ -117,23 +120,23 @@ executable apteryx-server
         , wai-routing
         , warp
 
-executable apteryx-upload
-    main-is:            Main.hs
-    hs-source-dirs:     apteryx-upload
-    default-language:   Haskell2010
-    ghc-options:
-        -threaded
-        -Wall
-        -with-rtsopts=-T
-        -funbox-strict-fields
+-- executable apteryx-upload
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-upload
+--     default-language:   Haskell2010
+--     ghc-options:
+--         -threaded
+--         -Wall
+--         -with-rtsopts=-T
+--         -funbox-strict-fields
 
-    build-depends:
-          amazonka
-        , base
-        , conduit-extra
-        , http-conduit
-        , optparse-applicative
-        , apteryx
-        , system-filepath
-        , text
-        , transformers
+--     build-depends:
+--           amazonka
+--         , base
+--         , conduit-extra
+--         , http-conduit
+--         , optparse-applicative
+--         , apteryx
+--         , system-filepath
+--         , text
+--         , transformers

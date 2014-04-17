@@ -22,9 +22,9 @@ import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Data.Conduit
 import           Data.Monoid
-import           Data.Text                (Text)
-import qualified Data.Text                as Text
-import qualified Network.APT.S3           as S3
+import           Data.Text             (Text)
+import qualified Data.Text             as Text
+import qualified Network.APT.S3        as S3
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types
@@ -32,9 +32,9 @@ import           Options.Applicative
 import           System.APT.IO
 import           System.APT.Log
 import           System.APT.Options
-import qualified System.APT.Package       as Pkg
+import qualified System.APT.Package    as Pkg
 import           System.APT.Types
-import           System.Environment
+import           System.Environment    hiding (getEnv)
 
 data Options = Options
     { optFrom     :: !Key
@@ -133,7 +133,8 @@ build Options{..} Entry{..} = do
     (bdy, f) <- unwrapResumable (responseBody rs)
 
     say name "Parsing control from {}" [from]
-    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws bdy)) `finally` f
+    e    <- getEnv
+    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws e bdy)) `finally` f
 
     code <- status <$> S3.copy name from ctl optTo
     say name "Completed {}" [code]
@@ -143,4 +144,4 @@ build Options{..} Entry{..} = do
     status = Text.pack . show . statusCode . responseStatus
     name   = Text.drop 1 $ Text.dropWhile (/= '/') entKey
 
-    aws = hoist $ either throwM return <=< (`runEnv` undefined)
+    aws e = hoist $ either throwM return <=< (`runEnv` e)
