@@ -144,7 +144,7 @@ data Env = Env
 
 newEnv :: Options -> IO Env
 newEnv opts = do
-    e <- runEitherT $ AWS.loadEnv AuthDiscover (optDebug opts)
+    e <- runEitherT $ AWS.loadAWSEnv AuthDiscover (optDebug opts)
     Env opts <$> either error return e
              <*> Log.new Log.defSettings
              <*> newMVar ()
@@ -267,7 +267,7 @@ worker Env{..} = do
 
             mapM_ link (g : s)
 
-            AWS.runEnv appEnv (S3.entries "worker" optKey optVersions) >>=
+            AWS.runAWSEnv appEnv (S3.entries "worker" optKey optVersions) >>=
                 mapM_ (atomically . writeTQueue inp . Just) . either throwM id
 
             mapM_ wait s
@@ -289,7 +289,7 @@ scatter env inp out = go
               mxs
 
     push xs = do
-        e <- AWS.runEnv env . forM_ xs $ \Entry{..} -> do
+        e <- AWS.runAWSEnv env . forM_ xs $ \Entry{..} -> do
             liftIO $ say "scatter" "Entry: {}" [entKey]
             ctl <- S3.metadata "scatter" entKey
             liftIO $ say "scatter" "Meta: {}" [show ctl]

@@ -37,7 +37,7 @@ library
         , System.APT.Types
 
     build-depends:
-          amazonka             >= 0.3.5
+          amazonka             >= 0.3.6
         , async
         , attoparsec
         , base                 >= 4.6 && < 5
@@ -66,30 +66,30 @@ library
         , transformers
         , unix
 
--- executable apteryx-build
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-build
---     default-language:   Haskell2010
---     ghc-options:
---         -threaded
---         -Wall
---         -with-rtsopts=-N
---         -with-rtsopts=-T
---         -funbox-strict-fields
+executable apteryx-build
+    main-is:            Main.hs
+    hs-source-dirs:     apteryx-build
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-N
+        -with-rtsopts=-T
+        -funbox-strict-fields
 
---     build-depends:
---           amazonka
---         , base
---         , conduit
---         , exceptions
---         , http-conduit
---         , http-types
---         , mmorph
---         , optparse-applicative
---         , apteryx
---         , stm
---         , text
---         , transformers
+    build-depends:
+          amazonka
+        , base
+        , conduit
+        , exceptions
+        , http-conduit
+        , http-types
+        , mmorph
+        , optparse-applicative
+        , apteryx
+        , stm
+        , text
+        , transformers
 
 executable apteryx-server
     main-is:            Main.hs

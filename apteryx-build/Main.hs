@@ -110,7 +110,7 @@ main = do
         write = liftIO . atomically . writeTQueue queue
 
     runMain name . runAWS AuthDiscover optDebug $ do
-        S3.entries name optFrom optVersions >>= mapM_ (write . Just)
+        S3.entries name optFrom optVersions >>= mapM_ (write . Just) . concat
         ws <- mapM (\n -> async $ worker n o queue) num
         mapM_ write (map (const Nothing) num)
         mapM_ wait ws
@@ -128,20 +128,18 @@ worker n o q = say_ name "Starting..." >> go
 
 build :: Options -> Entry -> AWS ()
 build Options{..} Entry{..} = do
-    say name "Retrieving {}" [from]
-    rs   <- send $ GetObject (keyBucket from) (keyPrefix from) []
+    say name "Retrieving {}" [entKey]
+    rs   <- send $ GetObject (keyBucket entKey) (keyPrefix entKey) []
     (bdy, f) <- unwrapResumable (responseBody rs)
 
-    say name "Parsing control from {}" [from]
+    say name "Parsing control from {}" [entKey]
     e    <- getEnv
     ctl  <- liftEitherT (Pkg.fromFile optTemp (aws e bdy)) `finally` f
 
-    code <- status <$> S3.copy name from ctl optTo
+    code <- status <$> S3.copy name entKey ctl optTo
     say name "Completed {}" [code]
   where
-    from = Key (keyBucket optFrom) entKey
-
     status = Text.pack . show . statusCode . responseStatus
-    name   = Text.drop 1 $ Text.dropWhile (/= '/') entKey
+    name   = Text.drop 1 $ Text.dropWhile (/= '/') (keyPrefix entKey)
 
-    aws e = hoist $ either throwM return <=< (`runEnv` e)
+    aws e = hoist $ either throwM return <=< runEnv e
