@@ -5,7 +5,6 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TypeOperators              #-}
-{-# LANGUAGE ViewPatterns               #-}
 
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
@@ -23,36 +22,43 @@ module Main (main) where
 
 import           Control.Applicative
 import           Control.Concurrent
+import           Control.Concurrent.Async
+import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
 import           Data.ByteString             (ByteString)
+import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
-import           Data.Text                   (Text)
 import qualified Data.Text.Encoding          as Text
 import           Data.Word
-import           Network.AWS
+import qualified Filesystem.Path.CurrentOS   as Path
+import qualified Network.APT.S3              as S3
+import           Network.AWS                 (Credentials(..), AWSEnv)
+import qualified Network.AWS                 as AWS
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.Gzip as GZip
-import           Network.Wai.Predicate       hiding (Error)
+import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (head)
 import           System.APT.IO
+import           System.APT.Log
 import           System.APT.Options
-import           System.APT.Package
+import qualified System.APT.Package          as Pkg
 import           System.APT.Types
+import           System.Directory
+import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT
-import qualified System.LoggerT              as LogT
 
 default (ByteString)
 
@@ -60,7 +66,9 @@ data Options = Options
     { optHost     :: !String
     , optPort     :: !Word16
     , optKey      :: !Key
+    , optTemp     :: !Path
     , optWWW      :: !Path
+    , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
@@ -90,10 +98,27 @@ options = Options
          )
 
     <*> pathOption
-         ( long "dir"
+         ( long "tmp"
+        <> short 't'
         <> metavar "PATH"
-        <> help "Directory to serve the generated Packages index from. [default: ./www]"
+        <> help "Temporary directory for building new Package indexes. [default: /tmp]"
+        <> value "/tmp"
+         )
+
+    <*> pathOption
+         ( long "www"
+        <> short 'w'
+        <> metavar "PATH"
+        <> help "Directory to serve the generated Packages index from. [default: www]"
         <> value "www"
+         )
+
+    <*> option
+         ( long "concurrency"
+        <> short 'c'
+        <> metavar "INT"
+        <> help "Maximum number of packages to process concurrently. [default: 10]"
+        <> value 10
          )
 
     <*> option
@@ -119,7 +144,7 @@ data Env = Env
 
 newEnv :: Options -> IO Env
 newEnv opts = do
-    e <- runEitherT $ loadEnv AuthDiscover (optDebug opts)
+    e <- runEitherT $ AWS.loadEnv AuthDiscover (optDebug opts)
     Env opts <$> either error return e
              <*> Log.new Log.defSettings
              <*> newMVar ()
@@ -191,7 +216,7 @@ serve o@Options{..} = do
 
     logException l _ x = Log.err l $ msg (BS.pack $ show x)
 
-    serverError = responseLBS status500 [] "server-error\n"
+    serverError = plain status500 "server-error\n"
 
 routes :: Routes a (EitherT Error App) ()
 routes = do
@@ -210,42 +235,95 @@ routes = do
 
 -- reindex :: Arch ::: Text ::: Text -> Handler
 -- reindex (arch ::: name ::: vers) = do
---     LogT.debug $ field "reindex" (arch +++ "/" +++ name +++ "/" +++ vers)
+--     debug $ field "reindex" (arch +++ "/" +++ name +++ "/" +++ vers)
 --     return blank
 
 rebuild :: Handler
-rebuild  = do
+rebuild = do
     p <- asks appLock >>= liftIO . isEmptyMVar
-    if p then inprogress else invoke
+    if p
+        then do
+            debug $ msg "Rebuild already in progress."
+            return (plain status200 "rebuild-in-progress\n")
+        else do
+            e <- ask
+            void . liftIO . forkIO $ worker e
+            return (plain status202 "starting-rebuild\n")
+
+worker :: Env -> IO ()
+worker Env{..} = do
+    Log.debug appLogger $ field "worker" "Rebuild complete."
+    Log.debug appLogger $ field "worker" "Starting rebuild..."
+
+    withMVar appLock . const . void $ do
+        let Options{..} = appOptions
+            num         = [1..optN]
+
+        inp <- atomically newTQueue
+        out <- atomically newTQueue
+
+        withAsync (gather optTemp optWWW out) $ \g -> do
+            s <- mapM (const . async $ scatter appEnv inp out) num
+
+            mapM_ link (g : s)
+
+            AWS.runEnv appEnv (S3.entries "worker" optKey optVersions) >>=
+                mapM_ (atomically . writeTQueue inp . Just) . either throwM id
+
+            mapM_ wait s
+
+            atomically $ writeTQueue out Nothing
+
+            wait g
+
+scatter :: AWSEnv
+        -> TQueue  (Maybe [Entry])
+        -> TQueue (Maybe Control)
+        -> IO ()
+scatter env inp out = go
   where
-    inprogress :: Handler
-    inprogress = do
-        LogT.debug $ field "rebuild" "Rebuild already in progress."
-        return (responseLBS status200 [] "rebuild-in-progress\n")
+    go = do
+        mxs <- atomically $ readTQueue inp
+        maybe (say_ "scatter" "Exiting..." >> say_ "scatter" "Really...")
+              (\xs -> push xs >> go)
+              mxs
 
-    invoke :: Handler
-    invoke = do
-        forkWorker
-        return (responseLBS status200 [] "starting-rebuild\n")
+    push xs = do
+        e <- AWS.runEnv env . forM_ xs $ \Entry{..} -> do
+            liftIO $ say "scatter" "Entry: {}" [entKey]
+            ctl <- S3.metadata "scatter" entKey
+            liftIO $ say "scatter" "Meta: {}" [show ctl]
+            liftIO . atomically $ writeTQueue out (Just ctl)
+        say "scatter" "S3 Metadata result: {}" [show e]
 
-    forkWorker :: EitherT Error App ()
-    forkWorker = do
-        Env{..} <- ask
-        void . liftIO
-             . forkIO
-             . void
-             $ flip runEnv appEnv $ do
-                 Log.debug appLogger $ field "rebuild-worker" "Starting rebuild..."
-                 liftIO . withMVar appLock $ const (threadDelay 15000000)
-                 Log.debug appLogger $ field "rebuild-worker" "Rebuild complete."
+gather :: Path
+       -> Path
+       -> TQueue (Maybe Control)
+       -> IO ()
+gather tmp dest out = withTempFile tmp ".pkg" $ \src hd -> do
+   hSetBinaryMode hd True
+   hSetBuffering hd (BlockBuffering Nothing)
+   say "gather" "Opened {}" [show src]
+   go src hd
+  where
+    go src hd = do
+        say_ "gather" "Waiting..."
+        mc <- atomically $ readTQueue out
+        say "gather" "Received: {}" [show mc]
+        maybe (hClose hd >> copyFile (Path.encodeString src) (Path.encodeString dest))
+              (hPutBuilder hd . Pkg.toBuilder)
+              mc
+
+-- plain :: Response
+plain code = responseLBS code []
 
 blank :: Response
-blank = responseLBS status200 [] ""
+blank = plain status200 ""
 
 onError :: Error -> App Response
 onError e = case statusCode code of
-    c | c >= 500  -> LogT.err errField
-      | c >= 400  -> LogT.debug errField
+    c | c >= 500  -> err errField
+      | c >= 400  -> debug errField
       | otherwise -> return ()
     >> return (responseLBS code [] $ LBS.fromStrict lbl <> "\n")
   where

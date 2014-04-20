@@ -42,7 +42,8 @@ import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
 -- FIXME: pulls all of a bucket's keys into memory.
-entries :: Text -> Key -> Int -> AWS [Entry]
+-- | Returns a set of grouped identical entries, ordered by version.
+entries :: Text -> Key -> Int -> AWS [[Entry]]
 entries name key n = do
     say name "Paginating contents of {}" [key]
     paginate (GetBucket (keyBucket key) (Delimiter '/') prefix 200 Nothing)
@@ -58,13 +59,13 @@ entries name key n = do
         | bcStorageClass == Glacier = False
         | otherwise                 = debExt `Text.isSuffixOf` bcKey
 
-    catalogue m = await >>=
-        maybe (return . concat $ Map.elems m)
-              (catalogue . entry m)
+    catalogue m = await >>= maybe (return $ Map.elems m) (catalogue . entry m)
 
     entry m Contents{..} = Map.insertWith add (arch, pre) item m
       where
         add new old = take n . nub . sort $ new <> old
+
+        item = [Entry (Key (keyBucket key) bcKey) end (digits ver) (fromIntegral bcSize)]
 
         (arch, ver)
             | Just x <- "amd64" `Text.stripSuffix` suf = (Amd64, x)
@@ -75,19 +76,16 @@ entries name key n = do
             . fromMaybe name
             $ debExt `Text.stripSuffix` end
 
-        item = [Entry bcKey end (digits ver) (fromIntegral bcSize)]
-        end  = last $ Text.split (== '/') bcKey
+        end = last $ Text.split (== '/') bcKey
 
         digits = filter (not . Text.null)
             . map (Text.filter isDigit)
-            . Text.split delim
-
-        delim = flip elem "_.\\+~"
+            . Text.split (`elem` "_.\\+~")
 
 copy :: Text -> Key -> Control -> Key -> AWS PutObjectCopyResponse
 copy name from c@Control{..} to = do
     say name "Copying to {}" [dest]
-    send $ PutObjectCopy
+    send PutObjectCopy
         { pocBucket    = keyBucket dest
         , pocKey       = keyPrefix dest
         , pocSource    = src

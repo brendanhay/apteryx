@@ -118,13 +118,13 @@ main = do
 worker :: Int -> Options -> TQueue (Maybe Entry) -> AWS ()
 worker n o q = say_ name "Starting..." >> go
   where
-    name = "worker " <> Text.pack (show n)
-
     go = do
         mx <- liftIO . atomically $ readTQueue q
         maybe (say_ name "No more entries, exiting...")
               (\x -> build o x >> go)
               mx
+
+    name = "worker " <> Text.pack (show n)
 
 build :: Options -> Entry -> AWS ()
 build Options{..} Entry{..} = do

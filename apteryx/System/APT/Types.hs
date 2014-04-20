@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
@@ -36,6 +37,7 @@ import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
 import           Data.Text.Buildable
 import qualified Data.Text.Encoding               as Text
+import           Data.Typeable
 import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
 import           Network.HTTP.Types
@@ -51,7 +53,9 @@ data Error
     | MissingField Text
     | InvalidField Text
     | Exception    SomeException
-      deriving (Show)
+      deriving (Show, Typeable)
+
+instance Exception Error
 
 instance ToError Error where
     toError (Exception ex) = toError ex
@@ -116,7 +120,7 @@ mkKey = uncurry Key . second f . Text.break p . f
     p = (== '/')
 
 data Entry = Entry
-    { entKey     :: !Text
+    { entKey     :: !Key
     , entName    :: !Text
     , entVersion :: [Text]
     , entSize    :: !Int64

@@ -18,6 +18,7 @@ import           Control.DeepSeq
 import           Control.Error
 import           Control.Exception
 import           Control.Monad
+import           Control.Monad.Catch        hiding (try)
 import           Control.Monad.IO.Class
 import           Crypto.Hash
 import qualified Crypto.Hash.Conduit        as Crypto
@@ -40,30 +41,38 @@ ensureExists (Path.encodeString -> dir) = do
     p <- doesDirectoryExist dir
     unless p $ hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
 
-getFileSize :: MonadIO m => Path -> EitherT Error m Size
-getFileSize = catchError
+getFileSizeT :: MonadIO m => Path -> EitherT Error m Size
+getFileSizeT = catchErrorT
     . fmap (fromIntegral . fileSize)
     . getFileStatus
     . Path.encodeString
 
-hashFile :: (MonadIO m, HashAlgorithm a)
-         => Path
-         -> EitherT Error m (Digest a)
-hashFile = catchError . Crypto.hashFile . Path.encodeString
+hashFileT :: (MonadIO m, HashAlgorithm a)
+          => Path
+          -> EitherT Error m (Digest a)
+hashFileT = catchErrorT . Crypto.hashFile . Path.encodeString
 
-withTempFile :: MonadIO m
-             => Path
+withTempFile :: Path
              -> String
-             -> (Path -> Handle -> EitherT Error m a)
-             -> EitherT Error m a
-withTempFile dir tmpl f = do
-    (path, hd) <- catchError $ openTempFile (Path.encodeString dir) tmpl
-    f (Path.decodeString path) hd `catchT`
-        \e -> catchError (removeFile path) >> left e
+             -> (Path -> Handle -> IO a)
+             -> IO a
+withTempFile dir tmpl f = runEitherT run >>= either throwM return
+  where
+    run = withTempFileT dir tmpl (\path hd -> catchErrorT $ f path hd)
 
-runShell :: MonadIO m => String -> EitherT Error m ByteString
-runShell cmd = do
-    (c, obs, ebs) <- catchError $ createProcess opts >>= run
+withTempFileT :: MonadIO m
+              => Path
+              -> String
+              -> (Path -> Handle -> EitherT Error m a)
+              -> EitherT Error m a
+withTempFileT dir tmpl f = do
+    (path, hd) <- catchErrorT $ openTempFile (Path.encodeString dir) tmpl
+    f (Path.decodeString path) hd `catchT`
+        \e -> catchErrorT (removeFile path) >> left e
+
+runShellT :: MonadIO m => String -> EitherT Error m ByteString
+runShellT cmd = do
+    (c, obs, ebs) <- catchErrorT $ createProcess opts >>= run
     case c of
         ExitFailure n -> left  $ ShellError n cmd ebs
         ExitSuccess   -> right $ LBS.toStrict obs
@@ -71,11 +80,16 @@ runShell cmd = do
     run (Just inh, Just outh, Just errh, hd) = do
         obs <- LBS.hGetContents outh
         ebs <- LBS.hGetContents errh
+
         hClose inh
+
         a <- async $ evaluate (rnf obs) >> hClose outh
         b <- async $ evaluate (rnf ebs) >> hClose errh
+
         void $ waitEitherCancel a b
+
         c <- waitForProcess hd
+
         return (c, obs, ebs)
 
     run _ = return (ExitFailure 1, "", "")
@@ -94,8 +108,8 @@ runMain name m = do
            (const $ say_ name "Completed." >> exitSuccess)
            exit
 
-catchError :: MonadIO m => IO a -> EitherT Error m a
-catchError = EitherT
+catchErrorT :: MonadIO m => IO a -> EitherT Error m a
+catchErrorT = EitherT
     . liftIO
     . liftM (fmapL Exception)
     . (try :: IO a -> IO (Either SomeException a))

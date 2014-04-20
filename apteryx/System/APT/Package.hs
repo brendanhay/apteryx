@@ -13,7 +13,8 @@
 -- Portability : non-portable (GHC extensions)
 
 module System.APT.Package
-    ( toHeaders
+    ( toBuilder
+    , toHeaders
     , fromHeaders
     , fromMap
     , fromFile
@@ -27,12 +28,13 @@ import           Control.Monad.IO.Class
 import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
-import qualified Data.ByteString.Base64           as Base64
+import qualified Data.ByteString.Base16           as Base16
+import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8            as BS
 import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
-import           Data.Char                        (isAlpha)
+import           Data.Char                        (isAlpha, toUpper)
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
 import           Data.Map.Strict                  (Map)
@@ -46,33 +48,53 @@ import           System.APT.IO
 import           System.APT.Types
 import           System.IO                        (hClose)
 
+toBuilder :: Control -> Builder
+toBuilder Control{..} = mconcat $
+    [ "Package: "      <> byteString ctlPackage
+    , "Version: "      <> byteString ctlVersion
+    , "Architecture: " <> byteString (toBytes ctlArch)
+    , "Size: "         <> byteString (toBytes ctlArch)
+    , "MD5Sum: "       <> byteString (toBytes ctlArch)
+    , "SHA1: "         <> byteString (toBytes ctlArch)
+    , "SHA256: "       <> byteString (toBytes ctlArch)
+    ] ++ map (byteString . line) (Map.toList ctlOptional)
+  where
+    line (k, v) = upcase (CI.original k) <> ": " <> v
+
+    upcase k
+        | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
+        | otherwise                   = k
+
 toHeaders :: Control -> [Header]
 toHeaders Control{..} =
-    [ ("content-md5",  base64 ctlMD5Sum)
+    [ ("content-md5",  base16 ctlMD5Sum)
     , ("content-type", "application/x-deb")
     ] ++ [ "package"      =@ ctlPackage
          , "version"      =@ ctlVersion
          , "architecture" =@ toBytes ctlArch
-         , "sha1"         =@ base64 ctlSHA1
-         , "sha256"       =@ base64 ctlSHA256
+         , "sha1"         =@ base16 ctlSHA1
+         , "sha256"       =@ base16 ctlSHA256
          ]
   where
     (=@) k = (CI.mk headerPrefix <> k,)
 
-    base64 :: Byteable a => a -> ByteString
-    base64 = Base64.encode . toBytes
+    base16 :: Byteable a => a -> ByteString
+    base16 = Base16.encode . toBytes
 
 fromHeaders :: [Header] -> Either Error Control
 fromHeaders xs = join $ fromMap hs
     <$> size "content-length"
-    <*> digest "etag"
-    <*> digest "sha1"
-    <*> digest "sha256"
+    <*> digest "etag" (BS.init . BS.tail)
+    <*> digest "sha1" id
+    <*> digest "sha256" id
   where
-    size k   = require k hs >>= field Size decimal
-    digest k = require k hs >>=
-        note (InvalidField . Text.decodeUtf8 $ "Unable to read digest" <> CI.original k)
-            . digestFromByteString
+    size k = require k hs >>= field Size decimal
+
+    digest k f = require k hs >>= \e ->
+        let bs  = fst . Base16.decode $ f e
+            msg = "Unable to read digest: " <> CI.original k <> " " <> bs
+         in note (InvalidField $ Text.decodeUtf8 msg)
+                 (digestFromByteString bs)
 
     hs = Map.fromList $ map (first stripPrefix) xs
 
@@ -113,16 +135,16 @@ fromFile :: MonadIO m
             => Path
             -> Source IO ByteString
             -> EitherT Error m Control
-fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
-    catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
+fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
+    catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
     let f = Path.encodeString path
-    bs <- runShell $ "ar -p " ++ f ++ " control.tar.gz | tar -Ox control"
+    bs <- runShellT $ "ar -p " ++ f ++ " control.tar.gz | tar -Ox control"
     fs <- hoistEither (fields bs)
     hoistEither =<< fromMap fs
-        <$> getFileSize path
-        <*> hashFile path
-        <*> hashFile path
-        <*> hashFile path
+        <$> getFileSizeT path
+        <*> hashFileT path
+        <*> hashFileT path
+        <*> hashFileT path
   where
     fields = field (Map.fromList . map (first CI.mk)) parser
 
