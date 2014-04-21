@@ -11,13 +11,14 @@
 -- Portability : non-portable (GHC extensions)
 
 module System.APT.Log
-    ( say_
+    ( Logger
+    , newLogger
+
+    , err_
+    , say_
     , say
     , sayT_
     , sayT
-
-    , Logger
-    , newLogger
     ) where
 
 import           Control.Monad.IO.Class
@@ -28,6 +29,12 @@ import           Data.Text.Format.Params (Params)
 import           System.Logger
 import           System.LoggerT          (MonadLogger)
 import qualified System.LoggerT          as LogT
+
+newLogger :: IO Logger
+newLogger = new defSettings
+
+err_ :: (MonadIO m, ToBytes a) => Logger -> ByteString -> a -> m ()
+err_ lgr lbl = err lgr . field lbl
 
 say_ :: (MonadIO m, ToBytes a) => Logger -> ByteString -> a -> m ()
 say_ lgr lbl = debug lgr . field lbl
@@ -40,6 +47,3 @@ sayT_ lbl = LogT.debug . field lbl
 
 sayT :: (MonadLogger m, Params ps) => ByteString -> Format -> ps -> m ()
 sayT lbl fmt ps = LogT.debug . field lbl $ Text.format fmt ps
-
-newLogger :: IO Logger
-newLogger = new defSettings

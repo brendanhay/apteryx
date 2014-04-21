@@ -14,7 +14,6 @@
 module Main (main) where
 
 import           Control.Monad.IO.Class
-import qualified Data.ByteString.Char8     as BS
 import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
 import qualified Filesystem.Path.CurrentOS as Path
@@ -22,11 +21,9 @@ import qualified Network.APT.S3            as S3
 import           Network.AWS.S3
 import           Options.Applicative
 import           System.APT.IO
-import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
-import           System.Environment
 import           System.IO
 
 data Options = Options
@@ -77,16 +74,12 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-    name        <- BS.pack <$> getProgName
-    lgr         <- newLogger
-
-    res <- withFile (Path.encodeString optFile) ReadMode $ \hd ->
-        runAWS AuthDiscover optDebug $ do
-            c@Control{..} <- liftEitherT
-               $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
-              <* liftIO (hClose hd)
-            S3.upload lgr name optKey c optFile
-
-    exitEither res
+    runMain $ \name lgr ->
+         withFile (Path.encodeString optFile) ReadMode $ \hd ->
+            runAWS AuthDiscover optDebug $ do
+                c@Control{..} <- liftEitherT
+                   $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
+                  <* liftIO (hClose hd)
+                S3.upload lgr name optKey c optFile
 
 -- FIXME: Post to server to invalidate cache

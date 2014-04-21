@@ -81,15 +81,14 @@ executable apteryx-build
 
     build-depends:
           amazonka
+        , apteryx
         , base
-        , bytestring
         , conduit
         , exceptions
         , http-conduit
         , http-types
         , mmorph
         , optparse-applicative
-        , apteryx
         , text
         , transformers
 
@@ -107,7 +106,6 @@ executable apteryx-server
     build-depends:
           amazonka
         , apteryx
-        , async
         , base
         , bytestring
         , directory
@@ -116,7 +114,6 @@ executable apteryx-server
         , http-types
         , mtl
         , optparse-applicative
-        , stm
         , system-filepath
         , text
         , tinylog
@@ -141,7 +138,6 @@ executable apteryx-upload
           amazonka
         , apteryx
         , base
-        , bytestring
         , conduit-extra
         , http-conduit
         , optparse-applicative

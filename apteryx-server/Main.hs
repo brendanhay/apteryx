@@ -22,8 +22,6 @@ module Main (main) where
 
 import           Control.Applicative
 import           Control.Concurrent
-import           Control.Concurrent.Async
-import           Control.Concurrent.STM
 import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
@@ -35,7 +33,7 @@ import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Foldable               (foldMap)
-import           Data.List                   (sort, intersperse)
+import           Data.List                   (sort)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
@@ -176,19 +174,6 @@ instance MonadLogger (EitherT e App) where
     logger = lift logger
     prefix = lift prefix
 
--- instance MonadThrow (EitherT e App) where
---     throwM = lift . throwM
-
--- instance MonadCatch (EitherT e App) where
---     catch m f = EitherT $
---         runEitherT m `catch` \e -> runEitherT (f e)
-
---     mask a = EitherT $
---         mask $ \u -> runEitherT (a $ mapEitherT u)
-
---     uninterruptibleMask a = EitherT $
---         uninterruptibleMask $ \u -> runEitherT (a $ mapEitherT u)
-
 type Handler = EitherT Error App Response
 
 runHandler :: Env -> Handler -> IO Response
@@ -224,6 +209,9 @@ serve o@Options{..} = do
 
 routes :: Routes a (EitherT Error App) ()
 routes = do
+    get   "/i/status" (const $ return blank) true
+    head  "/i/status" (const $ return blank) true
+
     post  "/packages" (const rebuild) true
 
 --     patch "/packages/:arch/:name/:vers" reindex $
@@ -232,8 +220,6 @@ routes = do
 -- --    get   "/packages/:arch/:package" (const $ return blank) true
 --     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
 
---     get   "/i/status" (const $ return blank) true
---     head  "/i/status" (const $ return blank) true
   -- where
   --   patch = addRoute "PATCH"
 
@@ -267,9 +253,10 @@ worker Env{..} = withMVar appLock . const .
 
         say' "worker" "Opened {}" [src]
 
-        AWS.runAWSEnv appEnv $ do
+        rs <- AWS.runAWSEnv appEnv $ do
             xs <- S3.entries appLogger "worker" optKey optVersions
             liftIO $ parForM optN xs metadata (either throwM (append hd))
+        either throwM return rs
 
         hClose hd
         say' "gather" "Closed {}" [src]
@@ -285,7 +272,7 @@ worker Env{..} = withMVar appLock . const .
 
     append hd = hPutBuilder hd . foldMap (\x -> Pkg.toBuilder x <> "\n") . sort
 
--- plain :: Response
+plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
 
 blank :: Response

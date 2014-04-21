@@ -20,7 +20,6 @@ import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Morph
-import qualified Data.ByteString.Char8 as BS
 import           Data.Conduit
 import           Data.Monoid
 import           Data.Text             (Text)
@@ -36,7 +35,6 @@ import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package    as Pkg
 import           System.APT.Types
-import           System.Environment    hiding (getEnv)
 
 data Options = Options
     { optFrom     :: !Key
@@ -105,17 +103,12 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-    name          <- BS.pack <$> getProgName
-    lgr           <- newLogger
-
-    res <- runAWS AuthDiscover optDebug $ do
+    runMain $ \name lgr -> runAWS AuthDiscover optDebug $ do
         xs  <- S3.entries lgr name optFrom optVersions
         env <- getEnv
         liftIO $ parForM optN (concat xs)
             (runEnv env . build lgr o)
             (const $ return ())
-
-    exitEither res
 
 build :: Logger -> Options -> Entry -> AWS ()
 build lgr Options{..} Entry{..} = do
