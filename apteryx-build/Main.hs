@@ -103,8 +103,7 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-    name <- Text.pack <$> getProgName
-
+    name          <- Text.pack <$> getProgName
     runMain name . runAWS AuthDiscover optDebug $ do
         xs  <- S3.entries name optFrom optVersions
         env <- getEnv
