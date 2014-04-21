@@ -43,6 +43,7 @@ library
         , attoparsec
         , base                 >= 4.6 && < 5
         , base16-bytestring
+        , base64-bytestring
         , byteable
         , bytestring           >= 0.10.4
         , bytestring-from
@@ -107,6 +108,7 @@ executable apteryx-server
           amazonka
         , apteryx
         , base
+        , byteable
         , bytestring
         , directory
         , either
@@ -138,6 +140,8 @@ executable apteryx-upload
           amazonka
         , apteryx
         , base
+        , byteable
+        , bytestring
         , conduit-extra
         , http-conduit
         , optparse-applicative

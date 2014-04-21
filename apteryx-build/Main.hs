@@ -113,9 +113,10 @@ main = do
 
         when (isRight rs) $ do
             maybe (return ())
-                  (\addr -> withManager $ \man -> do
+                  (\host -> withManager $ \man -> do
+                       let addr = host <> "/packages"
                        say lgr name "Triggering {}" [addr]
-                       rq  <- parseUrl addr
+                       rq <- parseUrl addr
                        void $ httpLbs (rq { method = "POST" }) man)
                   optAddress
 

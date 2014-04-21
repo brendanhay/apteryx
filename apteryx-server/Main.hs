@@ -32,10 +32,12 @@ import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
+import           Data.Byteable
 import           Data.Foldable               (foldMap)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
+import           Data.Text                   (Text)
 import qualified Data.Text.Encoding          as Text
 import           Data.Word
 import           Filesystem.Path.CurrentOS   ((</>))
@@ -211,21 +213,21 @@ routes = do
     get   "/i/status" (const $ return blank) true
     head  "/i/status" (const $ return blank) true
 
-    post  "/packages" (const rebuild) true
+    patch "/packages/:arch/:name/:vers" reindex $
+        capture "arch" .&. capture "name" .&. capture "vers"
 
---     patch "/packages/:arch/:name/:vers" reindex $
---         capture "arch" .&. capture "name" .&. capture "vers"
+    post  "/packages" (const rebuild) true
 
 -- --    get   "/packages/:arch/:package" (const $ return blank) true
 --     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
 
-  -- where
-  --   patch = addRoute "PATCH"
+  where
+    patch = addRoute "PATCH"
 
--- reindex :: Arch ::: Text ::: Text -> Handler
--- reindex (arch ::: name ::: vers) = do
---     debug $ field "reindex" (arch +++ "/" +++ name +++ "/" +++ vers)
---     return blank
+reindex :: Arch ::: Text ::: Text -> Handler
+reindex (arch ::: name ::: vers) = do
+    sayT "reindex" "Path {}/{}/{}" [Text.decodeUtf8 $ toBytes arch, name, vers]
+    return blank
 
 rebuild :: Handler
 rebuild = do

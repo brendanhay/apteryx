@@ -28,7 +28,7 @@ import           Data.Char                 (isDigit)
 import           Data.Conduit
 import qualified Data.Conduit.List         as Conduit
 import           Data.Function             (on)
-import           Data.List                 (sortBy, nub)
+import           Data.List                 (sortBy)
 import qualified Data.Map.Strict           as Map
 import           Data.Monoid
 import           Data.Ord
@@ -114,6 +114,9 @@ upload lgr name key c@Control{..} (Path.encodeString -> path) = do
         { poBucket  = keyBucket dest
         , poKey     = keyPrefix dest
         , poHeaders = Pkg.toHeaders c
+
+--Why are the headers invalid, again?
+
         , poBody    = bdy
         }
   where

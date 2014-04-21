@@ -29,6 +29,7 @@ import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Base16           as Base16
+import qualified Data.ByteString.Base64           as Base64
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8            as BS
 import           Data.Byteable
@@ -70,7 +71,7 @@ toBuilder Control{..} = (<> "\n") . mconcat . intersperse "\n" $
 
 toHeaders :: Control -> [Header]
 toHeaders Control{..} =
-    [ ("content-md5",  base16 ctlMD5Sum)
+    [ ("content-md5",  base64 ctlMD5Sum)
     , ("content-type", "application/x-deb")
     ] ++ [ "package"      =@ ctlPackage
          , "version"      =@ ctlVersion
@@ -83,6 +84,9 @@ toHeaders Control{..} =
 
 base16 :: Byteable a => a -> ByteString
 base16 = Base16.encode . toBytes
+
+base64 :: Byteable a => a -> ByteString
+base64 = Base64.encode . toBytes
 
 fromHeaders :: [Header] -> Either Error Control
 fromHeaders xs = join $ fromMap hs

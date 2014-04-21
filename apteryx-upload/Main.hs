@@ -13,14 +13,19 @@
 
 module Main (main) where
 
+import           Control.Monad
 import           Control.Monad.IO.Class
+import qualified Data.ByteString.Char8     as BS
+import           Data.Byteable
 import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
 import qualified Filesystem.Path.CurrentOS as Path
 import qualified Network.APT.S3            as S3
 import           Network.AWS.S3
+import           Network.HTTP.Conduit
 import           Options.Applicative
 import           System.APT.IO
+import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
@@ -75,13 +80,22 @@ main :: IO ()
 main = do
     Options{..} <- parseOptions options
     runMain $ \name lgr ->
-         withFile (Path.encodeString optFile) ReadMode $ \hd ->
+        withFile (Path.encodeString optFile) ReadMode $ \hd ->
             runAWS AuthDiscover optDebug $ do
                 c@Control{..} <- liftEitherT
                    $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
                   <* liftIO (hClose hd)
+
                 S3.upload lgr name optKey c optFile
 
-         
+                let url = BS.unpack $ "/packages/" <> toBytes ctlArch <> "/" <> ctlPackage <> "/" <> ctlVersion
 
--- FIXME: Post to server to invalidate cache
+                maybe (return ())
+                      (\host -> liftIO $ do
+                           let addr = host <> url
+                           say lgr name "Triggering {}" [addr]
+                           man <- newManager conduitManagerSettings
+                           rq  <- parseUrl addr
+                           void $ httpLbs (rq { method = "PATCH" }) man
+                           closeManager man)
+                      optAddress
