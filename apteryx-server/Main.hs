@@ -52,6 +52,7 @@ import qualified Network.AWS                 as AWS
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
+import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
@@ -190,8 +191,9 @@ serve :: Options -> IO ()
 serve o@Options{..} = do
     ensureExists optWWW
     e <- newEnv o
-    runSettings (settings e) (handler e) `finally` closeEnv e
+    runSettings (settings e) (middleware e) `finally` closeEnv e
   where
+    middleware = GZip.gzip GZip.def . handler
     handler  e = runHandler e . route (prepare routes)
     settings e =
           setHost (fromString optHost)
@@ -236,12 +238,12 @@ reindex (arch ::: name ::: vers) = do
 
     return blank
 
-index :: Path -> Handler
-index file = do
+index :: Path -> ByteString -> Handler
+index file typ = do
     Options{..} <- asks appOptions
     let path = Path.encodeString (optWWW </> file)
     sayT "index" "{}" [path]
-    return $ responseFile status200 [] path Nothing
+    return $ responseFile status200 [("Content-Type")] path Nothing
 
 -- FIXME:
 -- need to generate/serve a Realease file?
