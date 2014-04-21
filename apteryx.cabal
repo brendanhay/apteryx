@@ -82,6 +82,7 @@ executable apteryx-build
     build-depends:
           amazonka
         , base
+        , bytestring
         , conduit
         , exceptions
         , http-conduit
@@ -140,9 +141,9 @@ executable apteryx-upload
           amazonka
         , apteryx
         , base
+        , bytestring
         , conduit-extra
         , http-conduit
         , optparse-applicative
         , system-filepath
-        , text
         , transformers

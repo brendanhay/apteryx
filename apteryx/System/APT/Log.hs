@@ -13,37 +13,33 @@
 module System.APT.Log
     ( say_
     , say
+    , sayT_
+    , sayT
+
+    , Logger
+    , newLogger
     ) where
 
-import           Control.Concurrent
-import           Control.Monad
 import           Control.Monad.IO.Class
-import           Data.Monoid
-import           Data.Text               (Text)
-import           Data.Text.Buildable
+import           Data.ByteString         (ByteString)
 import           Data.Text.Format        (Format)
 import qualified Data.Text.Format        as Text
 import           Data.Text.Format.Params (Params)
-import qualified Data.Text.IO            as Text
-import qualified Data.Text.Lazy          as LText
-import qualified System.IO.Unsafe        as Unsafe
+import           System.Logger
+import           System.LoggerT          (MonadLogger)
+import qualified System.LoggerT          as LogT
 
-say_ :: MonadIO m => Text -> Format -> m ()
-say_ lbl f = say lbl f ([] :: [Text])
+say_ :: (MonadIO m, ToBytes a) => Logger -> ByteString -> a -> m ()
+say_ lgr lbl = debug lgr . field lbl
 
-say :: (MonadIO m, Params ps) => Text -> Format -> ps -> m ()
-say lbl f ps = do
-    tid <- (drop 9 . show) `liftM` liftIO myThreadId
-    withLock $ Text.putStrLn . LText.toStrict $ label tid <> Text.format f ps
-  where
-    label tid = Text.format "[{}] [{}] "
-        [ Text.right 5  ' ' $ build tid
-        , Text.right 40 ' ' $ build lbl
-        ]
+say :: (MonadIO m, Params ps) => Logger -> ByteString -> Format -> ps -> m ()
+say lgr lbl fmt ps = debug lgr . field lbl $ Text.format fmt ps
 
-withLock :: MonadIO m => IO a -> m a
-withLock = liftIO . withMVar lock . const
+sayT_ :: (MonadLogger m, ToBytes a) => ByteString -> a -> m ()
+sayT_ lbl = LogT.debug . field lbl
 
-lock :: MVar ()
-lock = Unsafe.unsafePerformIO $ newMVar ()
-{-# NOINLINE lock #-}
+sayT :: (MonadLogger m, Params ps) => ByteString -> Format -> ps -> m ()
+sayT lbl fmt ps = LogT.debug . field lbl $ Text.format fmt ps
+
+newLogger :: IO Logger
+newLogger = new defSettings

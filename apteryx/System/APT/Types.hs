@@ -98,6 +98,11 @@ data Control = Control
     , ctlOptional :: Map (CI ByteString) ByteString
     } deriving (Eq, Show)
 
+instance Ord Control where
+    a `compare` b = f a `compare` f b
+      where
+        f Control{..} = (ctlPackage, ctlVersion)
+
 data Key = Key !Text !Text
     deriving (Eq, Show)
 

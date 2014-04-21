@@ -24,6 +24,7 @@ import           Control.Applicative
 import           Control.Concurrent
 import           Control.Concurrent.Async
 import           Control.Concurrent.STM
+import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
@@ -33,11 +34,14 @@ import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
+import           Data.Foldable               (foldMap)
+import           Data.List                   (sort, intersperse)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
 import qualified Data.Text.Encoding          as Text
 import           Data.Word
+import           Filesystem.Path.CurrentOS   ((</>))
 import qualified Filesystem.Path.CurrentOS   as Path
 import qualified Network.APT.S3              as S3
 import           Network.AWS                 (Credentials(..), AWSEnv)
@@ -49,7 +53,7 @@ import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
-import           Prelude                     hiding (head)
+import           Prelude                     hiding (concatMap, head)
 import           System.APT.IO
 import           System.APT.Log
 import           System.APT.Options
@@ -59,7 +63,6 @@ import           System.Directory
 import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT
-import           Control.Concurrent.ThreadPool
 
 default (ByteString)
 
@@ -147,7 +150,7 @@ newEnv :: Options -> IO Env
 newEnv opts = do
     e <- runEitherT $ AWS.loadAWSEnv AuthDiscover (optDebug opts)
     Env opts <$> either error return e
-             <*> Log.new Log.defSettings
+             <*> newLogger
              <*> newMVar ()
 
 closeEnv :: Env -> IO ()
@@ -244,83 +247,43 @@ rebuild = do
     p <- asks appLock >>= liftIO . isEmptyMVar
     if p
         then do
-            debug $ msg "Rebuild already in progress."
+            sayT_ "rebuild" "Rebuild already in progress."
             return (plain status200 "rebuild-in-progress\n")
         else do
-            e <- ask
-            void . liftIO . forkIO $ worker e
+            ask >>= void . liftIO . forkIO . worker
             return (plain status202 "starting-rebuild\n")
 
--- FIXME:
---   with temp file doesn't behave as desired 'finally'
---   package results are not ordered regarding versions
---   logging is unhelpful/verbose
---   not sure all cases of exceptions/child threads are covered
---   if any thread crashes, all the others should too
-
 worker :: Env -> IO ()
-worker Env{..} = do
-    Log.debug appLogger $ field "worker" "Rebuild complete."
-    Log.debug appLogger $ field "worker" "Starting rebuild..."
+worker Env{..} = withMVar appLock . const .
+    withTempFile optTemp ".pkg" $ \path hd -> do
+        let src  = Path.encodeString path
+            dest = Path.encodeString (optWWW </> "Packages")
+            say' = say appLogger
 
-    withMVar appLock . const . void $ do
-        let Options{..} = appOptions
-            num         = [1..optN]
-        inp <- atomically newTQueue
-        out <- atomically newTQueue
+        say_ appLogger "worker" "Starting rebuild..."
 
-        withAsync (gather optTemp optWWW out) $ \g -> do
-            s <- mapM (const . async $ scatter appEnv inp out) num
+        hSetBinaryMode hd True
+        hSetBuffering hd (BlockBuffering Nothing)
 
-            mapM_ link (g : s)
+        say' "worker" "Opened {}" [src]
 
-            AWS.runAWSEnv appEnv (S3.entries "worker" optKey optVersions) >>=
-                mapM_ (atomically . writeTQueue inp . Just) . either throwM id
+        AWS.runAWSEnv appEnv $ do
+            xs <- S3.entries appLogger "worker" optKey optVersions
+            liftIO $ parForM optN xs metadata (either throwM (append hd))
 
-            mapM_ (const . atomically $ writeTQueue inp Nothing) num
-            mapM_ wait s
+        hClose hd
+        say' "gather" "Closed {}" [src]
 
-            atomically $ writeTQueue out Nothing
+        copyFile src dest
+        say' "worker" "Wrote {}" [dest]
 
-            wait g
-
-scatter :: AWSEnv
-        -> TQueue  (Maybe [Entry])
-        -> TQueue (Maybe Control)
-        -> IO ()
-scatter env inp out = go
+        say_ appLogger "worker" "Rebuild complete."
   where
-    go = do
-        mxs <- atomically $ readTQueue inp
-        maybe (say_ "scatter" "Exiting..." >> say_ "scatter" "Really...")
-              (\xs -> push xs >> go)
-              mxs
+    Options{..} = appOptions
 
-    push xs = do
-        e <- AWS.runAWSEnv env . forM_ xs $ \Entry{..} -> do
-            liftIO $ say "scatter" "Entry: {}" [entKey]
-            ctl <- S3.metadata "scatter" entKey
-            liftIO $ say "scatter" "Meta: {}" [show ctl]
-            liftIO . atomically $ writeTQueue out (Just ctl)
-        say "scatter" "S3 Metadata result: {}" [show e]
+    metadata = AWS.runAWSEnv appEnv . mapM (S3.metadata appLogger "scatter" . entKey)
 
-gather :: Path
-       -> Path
-       -> TQueue (Maybe Control)
-       -> IO ()
-gather tmp dest out = withTempFile tmp ".pkg" $ \src hd -> do
-   hSetBinaryMode hd True
-   hSetBuffering hd (BlockBuffering Nothing)
-   say "gather" "Opened {}" [show src]
-   go src hd
-  where
-    go src hd = do
-        say_ "gather" "Waiting..."
-        mc <- atomically $ readTQueue out
-        say "gather" "Received: {}" [show mc]
-        maybe (say_ "gather" "Exiting..." >> hClose hd >> copyFile (Path.encodeString src) (Path.encodeString dest ++ "/Packages"))
-              (\x -> hPutBuilder hd (Pkg.toBuilder x <> "\n") >> go src hd)
-              mc
+    append hd = hPutBuilder hd . foldMap (\x -> Pkg.toBuilder x <> "\n") . sort
 
 -- plain :: Response
 plain code = responseLBS code []

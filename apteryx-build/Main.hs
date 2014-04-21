@@ -20,10 +20,12 @@ import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Morph
+import qualified Data.ByteString.Char8 as BS
 import           Data.Conduit
 import           Data.Monoid
 import           Data.Text             (Text)
 import qualified Data.Text             as Text
+import qualified Data.Text.Encoding    as Text
 import qualified Network.APT.S3        as S3
 import           Network.AWS.S3
 import           Network.HTTP.Conduit
@@ -103,26 +105,35 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-    name          <- Text.pack <$> getProgName
-    runMain name . runAWS AuthDiscover optDebug $ do
-        xs  <- S3.entries name optFrom optVersions
-        env <- getEnv
-        liftIO $ parForM optN (concat xs) (runEnv env . build o) (const $ return ())
+    name          <- BS.pack <$> getProgName
+    lgr           <- newLogger
 
-build :: Options  -> Entry -> AWS ()
-build Options{..} Entry{..} = do
-    say name "Retrieving {}" [entKey]
+    res <- runAWS AuthDiscover optDebug $ do
+        xs  <- S3.entries lgr name optFrom optVersions
+        env <- getEnv
+        liftIO $ parForM optN (concat xs)
+            (runEnv env . build lgr o)
+            (const $ return ())
+
+    exitEither res
+
+build :: Logger -> Options -> Entry -> AWS ()
+build lgr Options{..} Entry{..} = do
+    say lgr name "Retrieving {}" [entKey]
     rs   <- send $ GetObject (keyBucket entKey) (keyPrefix entKey) []
     (bdy, f) <- unwrapResumable (responseBody rs)
 
-    say name "Parsing control from {}" [entKey]
+    say lgr name "Parsing control from {}" [entKey]
     env  <- getEnv
     ctl  <- liftEitherT (Pkg.fromFile optTemp (aws env bdy)) `finally` f
 
-    code <- status <$> S3.copy name entKey ctl optTo
-    say name "Completed {}" [code]
+    code <- status <$> S3.copy lgr name entKey ctl optTo
+    say lgr name "Completed {}" [code]
   where
     status = Text.pack . show . statusCode . responseStatus
-    name   = Text.drop 1 $ Text.dropWhile (/= '/') (keyPrefix entKey)
+
+    name = Text.encodeUtf8
+        . Text.drop 1
+        $ Text.dropWhile (/= '/') (keyPrefix entKey)
 
     aws e = hoist $ either throwM return <=< runEnv e

@@ -24,9 +24,7 @@ import           Crypto.Hash
 import qualified Crypto.Hash.Conduit        as Crypto
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import           Data.Text                  (Text)
 import qualified Filesystem.Path.CurrentOS  as Path
-import           System.APT.Log
 import           System.APT.Types
 import           System.Directory
 import           System.Exit
@@ -100,13 +98,9 @@ runShellT cmd = do
         , std_err = CreatePipe
         }
 
-runMain :: Show e => Text -> IO (Either e a) -> IO ()
-runMain name m = do
-    say_ name "Starting..."
-    exit <- m
-    either (\ex -> hPrint stderr ex >> exitFailure)
-           (const $ say_ name "Completed." >> exitSuccess)
-           exit
+exitEither :: Show e => Either e a -> IO ()
+exitEither = either (\ex -> hPrint stderr ex >> exitFailure)
+                    (const exitSuccess)
 
 catchErrorT :: MonadIO m => IO a -> EitherT Error m a
 catchErrorT = EitherT

@@ -21,6 +21,7 @@ module Network.APT.S3
     ) where
 
 import           Control.Error
+import           Data.ByteString           (ByteString)
 import           Data.Byteable
 import           Data.Char                 (isDigit)
 import           Data.Conduit
@@ -28,7 +29,6 @@ import qualified Data.Conduit.List         as Conduit
 import           Data.List                 (sort, nub)
 import qualified Data.Map.Strict           as Map
 import           Data.Monoid
-import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import           Data.Text.Buildable
 import qualified Data.Text.Encoding        as Text
@@ -43,9 +43,9 @@ import           System.APT.Types
 
 -- FIXME: pulls all of a bucket's keys into memory.
 -- | Returns a set of grouped identical entries, ordered by version.
-entries :: Text -> Key -> Int -> AWS [[Entry]]
-entries name key n = do
-    say name "Paginating contents of {}" [key]
+entries :: Logger -> ByteString -> Key -> Int -> AWS [[Entry]]
+entries lgr name key n = do
+    say lgr name "Paginating contents of {}" [key]
     paginate (GetBucket (keyBucket key) (Delimiter '/') prefix 200 Nothing)
         $= Conduit.concatMap (filter match . gbrContents)
         $$ catalogue mempty
@@ -73,7 +73,7 @@ entries name key n = do
             | otherwise                                = (Other, suf)
 
         (pre, suf) = Text.break isDigit
-            . fromMaybe name
+            . fromMaybe end
             $ debExt `Text.stripSuffix` end
 
         end = last $ Text.split (== '/') bcKey
@@ -82,9 +82,14 @@ entries name key n = do
             . map (Text.filter isDigit)
             . Text.split (`elem` "_.\\+~")
 
-copy :: Text -> Key -> Control -> Key -> AWS PutObjectCopyResponse
-copy name from c@Control{..} to = do
-    say name "Copying to {}" [dest]
+copy :: Logger
+     -> ByteString
+     -> Key
+     -> Control
+     -> Key
+     -> AWS PutObjectCopyResponse
+copy lgr name from c@Control{..} to = do
+    say lgr name "Copying to {}" [dest]
     send PutObjectCopy
         { pocBucket    = keyBucket dest
         , pocKey       = keyPrefix dest
@@ -96,9 +101,9 @@ copy name from c@Control{..} to = do
     dest = destination to c
     src  = LText.toStrict . LText.toLazyText $ build from
 
-upload :: Text -> Key -> Control -> Path -> AWS ()
-upload name key c@Control{..} (Path.encodeString -> path) = do
-    say name "Uploading {} to {}" [build path, build dest]
+upload :: Logger -> ByteString -> Key -> Control -> Path -> AWS ()
+upload lgr name key c@Control{..} (Path.encodeString -> path) = do
+    say lgr name "Uploading {} to {}" [build path, build dest]
     bdy <- requestBodyFile path >>=
         liftEitherT . failWith (Err $ "Unable to read " ++ show path)
     send_ PutObject
@@ -110,9 +115,9 @@ upload name key c@Control{..} (Path.encodeString -> path) = do
   where
     dest = destination key c
 
-metadata :: Text -> Key -> AWS Control
-metadata name key = do
-    say name "Querying {}" [key]
+metadata :: Logger -> ByteString -> Key -> AWS Control
+metadata lgr name key = do
+    say lgr name "Querying {}" [key]
     hoistError . fmapL toError . Pkg.fromHeaders . responseHeaders
         =<< send HeadObject
             { hoBucket  = keyBucket key

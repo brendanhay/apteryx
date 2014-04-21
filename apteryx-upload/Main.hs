@@ -14,15 +14,15 @@
 module Main (main) where
 
 import           Control.Monad.IO.Class
+import qualified Data.ByteString.Char8     as BS
 import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
-import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
 import qualified Filesystem.Path.CurrentOS as Path
 import qualified Network.APT.S3            as S3
 import           Network.AWS.S3
 import           Options.Applicative
 import           System.APT.IO
+import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
@@ -33,7 +33,7 @@ data Options = Options
     { optKey     :: !Key
     , optFile    :: !Path
     , optTemp    :: !Path
-    , optAddress :: Maybe Text
+    , optAddress :: Maybe String
     , optDebug   :: !Bool
     } deriving (Eq, Show)
 
@@ -61,7 +61,7 @@ options = Options
         <> value "/tmp"
          )
 
-    <*> optional (textOption
+    <*> optional (strOption
          $ long "addr"
         <> short 'a'
         <> metavar "ADDR"
@@ -77,12 +77,16 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-    name        <- Text.pack <$> getProgName
-    runMain name . withFile (Path.encodeString optFile) ReadMode $ \hd -> do
+    name        <- BS.pack <$> getProgName
+    lgr         <- newLogger
+
+    res <- withFile (Path.encodeString optFile) ReadMode $ \hd ->
         runAWS AuthDiscover optDebug $ do
             c@Control{..} <- liftEitherT
                $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
               <* liftIO (hClose hd)
-            S3.upload name optKey c optFile
+            S3.upload lgr name optKey c optFile
+
+    exitEither res
 
 -- FIXME: Post to server to invalidate cache
