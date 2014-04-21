@@ -292,10 +292,10 @@ rebuild = do
     e <- ask
     p <- liftIO . isEmptyMVar $ appLock e
     when p $ go e
-    return $ response p
+    return $ rs p
   where
-    response True  = plain status200 "rebuild-in-progress\n"
-    response False = plain status202 "starting-rebuild\n"
+    rs True  = plain status200 "rebuild-in-progress\n"
+    rs False = plain status202 "starting-rebuild\n"
 
     go Env{..} = fork . lock . temp $ \path hd -> do
         let src = Path.encodeString path
