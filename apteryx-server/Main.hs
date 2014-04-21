@@ -254,6 +254,7 @@ worker Env{..} = withMVar appLock . const .
         either throwM return =<< AWS.runAWSEnv appEnv (do
             xs <- S3.entries appLogger "rebuild" optKey optVersions
             liftIO $ parForM optN xs metadata (either throwM (append hd)))
+
         hClose hd <* say appLogger "rebuild" "Closed {}" [src]
         copyFile src dest <* say appLogger "rebuild" "Wrote {}" [dest]
 
@@ -268,6 +269,7 @@ worker Env{..} = withMVar appLock . const .
         let ys  = reverse xs
             pkg = maybe "unknown" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
             vs  = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
+
         say appLogger "index" "Indexing {} {}" [pkg, vs]
         hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 

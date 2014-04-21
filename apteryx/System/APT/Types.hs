@@ -122,11 +122,6 @@ mkKey = uncurry Key . second f . Text.break p . f
 data Entry = Entry
     { entKey     :: !Key
     , entName    :: !Text
-    , entVersion :: [Text]
+    , entVersion :: [Int]
     , entSize    :: !Int64
     } deriving (Eq, Show)
-
-instance Ord Entry where
-    a `compare` b = f a `compare` f b
-      where
-        f Entry{..} = Down (entName, entVersion)

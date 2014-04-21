@@ -21,14 +21,17 @@ module Network.APT.S3
     ) where
 
 import           Control.Error
+import           Data.Attoparsec.Text      hiding (take)
 import           Data.ByteString           (ByteString)
 import           Data.Byteable
 import           Data.Char                 (isDigit)
 import           Data.Conduit
 import qualified Data.Conduit.List         as Conduit
-import           Data.List                 (sort, nub)
+import           Data.Function             (on)
+import           Data.List                 (sortBy, nub)
 import qualified Data.Map.Strict           as Map
 import           Data.Monoid
+import           Data.Ord
 import qualified Data.Text                 as Text
 import           Data.Text.Buildable
 import qualified Data.Text.Encoding        as Text
@@ -63,7 +66,8 @@ entries lgr name key n = do
 
     entry m Contents{..} = Map.insertWith add (arch, pre) item m
       where
-        add new old = take n . nub . sort $ new <> old
+        add :: [Entry] -> [Entry] -> [Entry]
+        add xs = take n . sortBy (compare `on` (Down . entVersion)) . mappend xs
 
         item = [Entry (Key (keyBucket key) bcKey) end (digits ver) (fromIntegral bcSize)]
 
@@ -78,9 +82,9 @@ entries lgr name key n = do
 
         end = last $ Text.split (== '/') bcKey
 
-        digits = filter (not . Text.null)
-            . map (Text.filter isDigit)
-            . Text.split (`elem` "_.\\+~")
+        digits = fromMaybe []
+           . hush
+           . parseOnly (decimal `sepBy` (satisfy $ inClass "_.\\+~"))
 
 copy :: Logger
      -> ByteString
