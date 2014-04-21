@@ -300,7 +300,7 @@ rebuild = do
     go Env{..} = fork . lock . temp $ \path hd -> do
         let src = Path.encodeString path
 
-        say appLogger "rebuild" "Starting rebuild in {}..." [src]
+        say appLogger "rebuild" "Starting rebuild of {}..." [src]
 
         hSetBinaryMode hd True
         hSetBuffering hd (BlockBuffering Nothing)
