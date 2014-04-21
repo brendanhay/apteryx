@@ -33,7 +33,6 @@ import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Foldable               (foldMap)
-import           Data.List                   (sort)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
@@ -119,8 +118,8 @@ options = Options
          ( long "concurrency"
         <> short 'c'
         <> metavar "INT"
-        <> help "Maximum number of packages to process concurrently. [default: 10]"
-        <> value 10
+        <> help "Maximum number of packages to process concurrently. [default: 6]"
+        <> value 6
          )
 
     <*> option
@@ -200,7 +199,7 @@ serve o@Options{..} = do
         $ defaultSettings
 
     logStart l = do
-        Log.info l $ msg "Apteryx starting..."
+        Log.info l $ msg "Apteryx server starting..."
         Log.info l $ msg ("Listening on " +++ optHost +++ ':' +++ optPort)
 
     logException l _ x = Log.err l $ msg (BS.pack $ show x)
@@ -244,33 +243,33 @@ worker Env{..} = withMVar appLock . const .
     withTempFile optTemp ".pkg" $ \path hd -> do
         let src  = Path.encodeString path
             dest = Path.encodeString (optWWW </> "Packages")
-            say' = say appLogger
 
-        say_ appLogger "worker" "Starting rebuild..."
+        say_ appLogger "rebuild" "Starting rebuild..."
 
         hSetBinaryMode hd True
         hSetBuffering hd (BlockBuffering Nothing)
 
-        say' "worker" "Opened {}" [src]
+        say appLogger "rebuild" "Opened {}" [src]
 
-        rs <- AWS.runAWSEnv appEnv $ do
-            xs <- S3.entries appLogger "worker" optKey optVersions
-            liftIO $ parForM optN xs metadata (either throwM (append hd))
-        either throwM return rs
+        either throwM return =<< AWS.runAWSEnv appEnv (do
+            xs <- S3.entries appLogger "rebuild" optKey optVersions
+            liftIO $ parForM optN xs metadata (either throwM (append hd)))
+        hClose hd <* say appLogger "rebuild" "Closed {}" [src]
+        copyFile src dest <* say appLogger "rebuild" "Wrote {}" [dest]
 
-        hClose hd
-        say' "gather" "Closed {}" [src]
-
-        copyFile src dest
-        say' "worker" "Wrote {}" [dest]
-
-        say_ appLogger "worker" "Rebuild complete."
+        say_ appLogger "rebuild" "Rebuild complete."
   where
     Options{..} = appOptions
 
-    metadata = AWS.runAWSEnv appEnv . mapM (S3.metadata appLogger "scatter" . entKey)
+    metadata = AWS.runAWSEnv appEnv
+        . mapM (S3.metadata appLogger "meta" . entKey)
 
-    append hd = hPutBuilder hd . foldMap (\x -> Pkg.toBuilder x <> "\n") . sort
+    append hd xs = do
+        let ys  = reverse xs
+            pkg = maybe "unknown" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
+            vs  = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
+        say appLogger "index" "Indexing {} {}" [pkg, vs]
+        hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
