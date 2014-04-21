@@ -15,7 +15,7 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Control.Concurrent.STM
+import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
@@ -103,38 +103,22 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-    name          <- Text.pack <$> getProgName
-    queue         <- atomically newTQueue
-
-    let num   = [1..optN]
-        write = liftIO . atomically . writeTQueue queue
+    name <- Text.pack <$> getProgName
 
     runMain name . runAWS AuthDiscover optDebug $ do
-        S3.entries name optFrom optVersions >>= mapM_ (write . Just) . concat
-        ws <- mapM (\n -> async $ worker n o queue) num
-        mapM_ write (map (const Nothing) num)
-        mapM_ wait ws
+        xs  <- S3.entries name optFrom optVersions
+        env <- getEnv
+        liftIO $ parForM optN (concat xs) (runEnv env . build o) (const $ return ())
 
-worker :: Int -> Options -> TQueue (Maybe Entry) -> AWS ()
-worker n o q = say_ name "Starting..." >> go
-  where
-    go = do
-        mx <- liftIO . atomically $ readTQueue q
-        maybe (say_ name "No more entries, exiting...")
-              (\x -> build o x >> go)
-              mx
-
-    name = "worker " <> Text.pack (show n)
-
-build :: Options -> Entry -> AWS ()
+build :: Options  -> Entry -> AWS ()
 build Options{..} Entry{..} = do
     say name "Retrieving {}" [entKey]
     rs   <- send $ GetObject (keyBucket entKey) (keyPrefix entKey) []
     (bdy, f) <- unwrapResumable (responseBody rs)
 
     say name "Parsing control from {}" [entKey]
-    e    <- getEnv
-    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws e bdy)) `finally` f
+    env  <- getEnv
+    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws env bdy)) `finally` f
 
     code <- status <$> S3.copy name entKey ctl optTo
     say name "Completed {}" [code]

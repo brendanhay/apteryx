@@ -59,6 +59,7 @@ import           System.Directory
 import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT
+import           Control.Concurrent.ThreadPool
 
 default (ByteString)
 
@@ -250,6 +251,13 @@ rebuild = do
             void . liftIO . forkIO $ worker e
             return (plain status202 "starting-rebuild\n")
 
+-- FIXME:
+--   with temp file doesn't behave as desired 'finally'
+--   package results are not ordered regarding versions
+--   logging is unhelpful/verbose
+--   not sure all cases of exceptions/child threads are covered
+--   if any thread crashes, all the others should too
+
 worker :: Env -> IO ()
 worker Env{..} = do
     Log.debug appLogger $ field "worker" "Rebuild complete."
@@ -258,7 +266,6 @@ worker Env{..} = do
     withMVar appLock . const . void $ do
         let Options{..} = appOptions
             num         = [1..optN]
-
         inp <- atomically newTQueue
         out <- atomically newTQueue
 
@@ -270,6 +277,7 @@ worker Env{..} = do
             AWS.runAWSEnv appEnv (S3.entries "worker" optKey optVersions) >>=
                 mapM_ (atomically . writeTQueue inp . Just) . either throwM id
 
+            mapM_ (const . atomically $ writeTQueue inp Nothing) num
             mapM_ wait s
 
             atomically $ writeTQueue out Nothing
@@ -310,8 +318,8 @@ gather tmp dest out = withTempFile tmp ".pkg" $ \src hd -> do
         say_ "gather" "Waiting..."
         mc <- atomically $ readTQueue out
         say "gather" "Received: {}" [show mc]
-        maybe (hClose hd >> copyFile (Path.encodeString src) (Path.encodeString dest))
-              (hPutBuilder hd . Pkg.toBuilder)
+        maybe (say_ "gather" "Exiting..." >> hClose hd >> copyFile (Path.encodeString src) (Path.encodeString dest ++ "/Packages"))
+              (\x -> hPutBuilder hd (Pkg.toBuilder x <> "\n") >> go src hd)
               mc
 
 -- plain :: Response

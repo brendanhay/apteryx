@@ -55,4 +55,3 @@ parMapM n xs f = do
         maybe (return ())
               (\x -> f x >>= atomically . writeTBQueue out . Just >> go inp out)
               mx
-

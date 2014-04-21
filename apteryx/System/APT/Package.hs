@@ -37,6 +37,7 @@ import qualified Data.CaseInsensitive             as CI
 import           Data.Char                        (isAlpha, toUpper)
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
+import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
@@ -49,16 +50,18 @@ import           System.APT.Types
 import           System.IO                        (hClose)
 
 toBuilder :: Control -> Builder
-toBuilder Control{..} = mconcat $
-    [ "Package: "      <> byteString ctlPackage
-    , "Version: "      <> byteString ctlVersion
-    , "Architecture: " <> byteString (toBytes ctlArch)
-    , "Size: "         <> byteString (toBytes ctlArch)
-    , "MD5Sum: "       <> byteString (toBytes ctlArch)
-    , "SHA1: "         <> byteString (toBytes ctlArch)
-    , "SHA256: "       <> byteString (toBytes ctlArch)
+toBuilder Control{..} = (<> "\n") . mconcat . intersperse "\n" $
+    [ "Package: "      =@ ctlPackage
+    , "Version: "      =@ ctlVersion
+    , "Architecture: " =@ toBytes ctlArch
+    , "Size: "         =@ toBytes ctlSize
+    , "MD5Sum: "       =@ base16 ctlMD5Sum
+    , "SHA1: "         =@ base16 ctlSHA1
+    , "SHA256: "       =@ base16 ctlSHA256
     ] ++ map (byteString . line) (Map.toList ctlOptional)
   where
+    (=@) k = mappend k . byteString
+
     line (k, v) = upcase (CI.original k) <> ": " <> v
 
     upcase k
@@ -78,8 +81,8 @@ toHeaders Control{..} =
   where
     (=@) k = (CI.mk headerPrefix <> k,)
 
-    base16 :: Byteable a => a -> ByteString
-    base16 = Base16.encode . toBytes
+base16 :: Byteable a => a -> ByteString
+base16 = Base16.encode . toBytes
 
 fromHeaders :: [Header] -> Either Error Control
 fromHeaders xs = join $ fromMap hs

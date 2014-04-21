@@ -29,7 +29,8 @@ library
         -Wall
 
     exposed-modules:
-          Network.APT.S3
+          Control.Concurrent.ThreadPool
+        , Network.APT.S3
         , System.APT.IO
         , System.APT.Log
         , System.APT.Options
@@ -59,6 +60,7 @@ library
         , http-types
         , optparse-applicative
         , process
+        , stm
         , system-filepath
         , text
         , text-format
@@ -87,7 +89,6 @@ executable apteryx-build
         , mmorph
         , optparse-applicative
         , apteryx
-        , stm
         , text
         , transformers
 
