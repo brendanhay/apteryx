@@ -28,11 +28,15 @@ import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
+import           Control.Monad.Trans.Resource
 import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Byteable
+import           Data.Conduit
+import qualified Data.Conduit.Binary         as Conduit
+import qualified Data.Conduit.Zlib           as Conduit
 import           Data.Foldable               (foldMap)
 import           Data.Maybe
 import           Data.Monoid
@@ -48,7 +52,6 @@ import qualified Network.AWS                 as AWS
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
-import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
@@ -187,9 +190,8 @@ serve :: Options -> IO ()
 serve o@Options{..} = do
     ensureExists optWWW
     e <- newEnv o
-    runSettings (settings e) (pipeline e) `finally` closeEnv e
+    runSettings (settings e) (handler e) `finally` closeEnv e
   where
-    pipeline e = GZip.gzip GZip.def (handler e)
     handler  e = runHandler e . route (prepare routes)
     settings e =
           setHost (fromString optHost)
@@ -218,6 +220,10 @@ routes = do
 
     post  "/packages" (const rebuild) true
 
+    get   "/Packages"    (const $ index "Packages") true
+    get   "/Packages.gz" (const $ index "Packages.gz") true
+
+
 -- --    get   "/packages/:arch/:package" (const $ return blank) true
 --     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
 
@@ -226,8 +232,32 @@ routes = do
 
 reindex :: Arch ::: Text ::: Text -> Handler
 reindex (arch ::: name ::: vers) = do
-    sayT "reindex" "Path {}/{}/{}" [Text.decodeUtf8 $ toBytes arch, name, vers]
+    sayT "reindex" "{}/{}/{}" [Text.decodeUtf8 $ toBytes arch, name, vers]
+
     return blank
+
+index :: Path -> Handler
+index file = do
+    Options{..} <- asks appOptions
+    let path = Path.encodeString (optWWW </> file)
+    sayT "index" "{}" [path]
+    return $ responseFile status200 [] path Nothing
+
+-- FIXME:
+-- need to generate/serve a Realease file?
+--
+-- add Packages.gz
+--
+-- ability to specify components when uploading? should affect prefix?
+--   correctly bucket/separate components in storage etc.
+--
+-- generate correct filename in Packages/.gz
+--
+-- add handler to redirect/301 to correct S3 file based on filename
+--
+-- repository signing
+--
+-- tidy up the triggering of successful reindex/rebuild
 
 rebuild :: Handler
 rebuild = do
@@ -244,23 +274,25 @@ worker :: Env -> IO ()
 worker Env{..} = withMVar appLock . const .
     withTempFile optTemp ".pkg" $ \path hd -> do
         let src  = Path.encodeString path
-            dest = Path.encodeString (optWWW </> "Packages")
+            pkg  = Path.encodeString (optWWW </> "Packages")
+            gzip = Path.encodeString (optWWW </> "Packages.gz")
 
-        say_ appLogger "rebuild" "Starting rebuild..."
+        say appLogger "rebuild" "Starting rebuild in {}..." [src]
 
         hSetBinaryMode hd True
         hSetBuffering hd (BlockBuffering Nothing)
-
-        say appLogger "rebuild" "Opened {}" [src]
 
         either throwM return =<< AWS.runAWSEnv appEnv (do
             xs <- S3.entries appLogger "rebuild" optKey optVersions
             liftIO $ parForM optN xs metadata (either throwM (append hd)))
 
         hClose hd <* say appLogger "rebuild" "Closed {}" [src]
-        copyFile src dest <* say appLogger "rebuild" "Wrote {}" [dest]
+        copyFile src pkg <* say appLogger "rebuild" "Copied {}" [pkg]
 
-        say_ appLogger "rebuild" "Rebuild complete."
+        runResourceT $ Conduit.sourceFile src
+            =$ Conduit.gzip
+            $$ Conduit.sinkFile gzip
+        say appLogger "rebuild" "Compressed {}" [gzip]
   where
     Options{..} = appOptions
 

@@ -88,7 +88,14 @@ main = do
 
                 S3.upload lgr name optKey c optFile
 
-                let url = BS.unpack $ "/packages/" <> toBytes ctlArch <> "/" <> ctlPackage <> "/" <> ctlVersion
+                let url = BS.unpack $ mconcat
+                      [ "/packages/"
+                      , toBytes ctlArch
+                      , "/"
+                      , ctlPackage
+                      , "/"
+                      , ctlVersion
+                      ]
 
                 maybe (return ())
                       (\host -> liftIO $ do
