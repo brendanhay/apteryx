@@ -82,4 +82,6 @@ main = do
                   <* liftIO (hClose hd)
                 S3.upload lgr name optKey c optFile
 
+         
+
 -- FIXME: Post to server to invalidate cache

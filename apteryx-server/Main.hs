@@ -267,7 +267,7 @@ worker Env{..} = withMVar appLock . const .
 
     append hd xs = do
         let ys  = reverse xs
-            pkg = maybe "unknown" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
+            pkg = maybe "N/A" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
             vs  = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
 
         say appLogger "index" "Indexing {} {}" [pkg, vs]

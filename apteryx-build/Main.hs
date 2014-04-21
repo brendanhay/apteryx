@@ -21,8 +21,8 @@ import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Data.Conduit
+import           Data.Either
 import           Data.Monoid
-import           Data.Text             (Text)
 import qualified Data.Text             as Text
 import qualified Data.Text.Encoding    as Text
 import qualified Network.APT.S3        as S3
@@ -40,7 +40,7 @@ data Options = Options
     { optFrom     :: !Key
     , optTo       :: !Key
     , optTemp     :: !Path
-    , optAddress  :: Maybe Text
+    , optAddress  :: Maybe String
     , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
@@ -68,7 +68,7 @@ options = Options
         <> value "/tmp"
          )
 
-    <*> optional (textOption
+    <*> optional (strOption
          $ long "addr"
         <> short 'a'
         <> metavar "ADDR"
@@ -103,12 +103,23 @@ options = Options
 main :: IO ()
 main = do
     o@Options{..} <- parseOptions options
-    runMain $ \name lgr -> runAWS AuthDiscover optDebug $ do
-        xs  <- S3.entries lgr name optFrom optVersions
-        env <- getEnv
-        liftIO $ parForM optN (concat xs)
-            (runEnv env . build lgr o)
-            (const $ return ())
+    runMain $ \name lgr -> do
+        rs <- runAWS AuthDiscover optDebug $ do
+            xs  <- S3.entries lgr name optFrom optVersions
+            env <- getEnv
+            liftIO $ parForM optN (concat xs)
+                (runEnv env . build lgr o)
+                (const $ return ())
+
+        when (isRight rs) $ do
+            maybe (return ())
+                  (\addr -> withManager $ \man -> do
+                       say lgr name "Triggering {}" [addr]
+                       rq  <- parseUrl addr
+                       void $ httpLbs (rq { method = "POST" }) man)
+                  optAddress
+
+        return rs
 
 build :: Logger -> Options -> Entry -> AWS ()
 build lgr Options{..} Entry{..} = do
