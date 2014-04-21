@@ -225,7 +225,6 @@ routes = do
     get   "/Packages"    (const $ index "Packages") true
     get   "/Packages.gz" (const $ index "Packages.gz") true
 
-
 -- --    get   "/packages/:arch/:package" (const $ return blank) true
 --     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
 
@@ -235,20 +234,47 @@ routes = do
 reindex :: Arch ::: Text ::: Text -> Handler
 reindex (arch ::: name ::: vers) = do
     sayT "reindex" "{}/{}/{}" [Text.decodeUtf8 $ toBytes arch, name, vers]
-
+--    check if file exists in S3, return 404 if not found
     return blank
 
-index :: Path -> ByteString -> Handler
-index file typ = do
-    Options{..} <- asks appOptions
-    let path = Path.encodeString (optWWW </> file)
+index :: Path -> Handler
+index file = do
+    path <- Path.encodeString . (</> file) . optWWW <$> asks appOptions
     sayT "index" "{}" [path]
-    return $ responseFile status200 [("Content-Type")] path Nothing
+    return $ responseFile status200 [] path Nothing
+
+-- How to do an incremental rebuild? Not possible without keeping all package meta
+-- in memory?
+
+-- Would solve the issue of streaming to file etc - just get all keys, keep result
+-- in memory, and write to disk/gzip everytime a PATCH is received.
+
+-- On rebuild, try to rebuild it and if succeeds throw away and replace in memory.
+
+-- Pooled repository? - Maybe not much point since non-cross compiled binaries
+
+-- deb uri distribution [component1] [component2] [...]
+
+-- Archive: archive
+-- Component: component
+-- Origin: YourCompany
+-- Label: YourCompany Debian repository
+-- Architecture: architecture
+-- Archive
+-- The name of the distribution of Debian the packages in this directory belong to (or are designed for), i.e. stable, testing or unstable.
+
+-- Component
+-- The component of the packages in the directory, for example main, non-free, or contrib.
+-- Origin
+-- The name of who made the packages.
+-- Label
+-- Some label adequate for the packages or for your repository. Use your fantasy.
+-- Architecture
+-- The architecture of the packages in this directory, such as i386, sparc or source.
+-- It is important to get Archive and Architecture right, as they're most used for pinning. The others are less important.
 
 -- FIXME:
 -- need to generate/serve a Realease file?
---
--- add Packages.gz
 --
 -- ability to specify components when uploading? should affect prefix?
 --   correctly bucket/separate components in storage etc.
@@ -263,21 +289,16 @@ index file typ = do
 
 rebuild :: Handler
 rebuild = do
-    p <- asks appLock >>= liftIO . isEmptyMVar
-    if p
-        then do
-            sayT_ "rebuild" "Rebuild already in progress."
-            return (plain status200 "rebuild-in-progress\n")
-        else do
-            ask >>= void . liftIO . forkIO . worker
-            return (plain status202 "starting-rebuild\n")
-
-worker :: Env -> IO ()
-worker Env{..} = withMVar appLock . const .
-    withTempFile optTemp ".pkg" $ \path hd -> do
-        let src  = Path.encodeString path
-            pkg  = Path.encodeString (optWWW </> "Packages")
-            gzip = Path.encodeString (optWWW </> "Packages.gz")
+    e <- ask
+    p  <- liftIO $ isEmptyMVar (appLock e)
+    when p (go e)
+    return . uncurry plain $
+        if p
+            then (status200, "rebuild-in-progress\n")
+            else (status202, "starting-rebuild\n")
+  where
+    go Env{..} = fork . lock . temp $ \path hd -> do
+        let src = Path.encodeString path
 
         say appLogger "rebuild" "Starting rebuild in {}..." [src]
 
@@ -295,19 +316,25 @@ worker Env{..} = withMVar appLock . const .
             =$ Conduit.gzip
             $$ Conduit.sinkFile gzip
         say appLogger "rebuild" "Compressed {}" [gzip]
-  where
-    Options{..} = appOptions
+      where
+        Options{..} = appOptions
 
-    metadata = AWS.runAWSEnv appEnv
-        . mapM (S3.metadata appLogger "meta" . entKey)
+        fork = void . liftIO . forkIO
+        lock = withMVar appLock . const
+        temp = withTempFile optTemp ".pkg"
 
-    append hd xs = do
-        let ys  = reverse xs
-            pkg = maybe "N/A" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
-            vs  = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
+        pkg  = Path.encodeString (optWWW </> "Packages")
+        gzip = Path.encodeString (optWWW </> "Packages.gz")
 
-        say appLogger "index" "Indexing {} {}" [pkg, vs]
-        hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
+        metadata = AWS.runAWSEnv appEnv
+            . mapM (S3.metadata appLogger "meta" . entKey)
+
+        append hd xs = do
+            let ys = reverse xs
+                n  = maybe "N/A" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
+                vs = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
+            say appLogger "index" "Indexing {} {}" [n, vs]
+            hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
