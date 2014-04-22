@@ -322,9 +322,10 @@ logRequest l app rq = line *> app rq
   where
     line = Log.debug l . msg
           $ show (remoteHost rq)
-        +++ ", "
+        +++ " -> "
         +++ requestMethod rq
         +++ ' '
         +++ rawPathInfo rq
         +++ rawQueryString rq
+        +++ ' '
         +++ show (httpVersion rq)
