@@ -14,25 +14,25 @@
 module Main (main) where
 
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Either
 import qualified Data.ByteString.Char8     as BS
-import           Data.Byteable
 import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
 import qualified Filesystem.Path.CurrentOS as Path
-import qualified Network.APT.S3            as S3
-import           Network.AWS.S3
 import           Network.HTTP.Conduit
+import           Network.HTTP.Types        (urlEncode)
 import           Options.Applicative
 import           System.APT.IO
-import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package        as Pkg
-import           System.APT.Types
+import qualified System.APT.Store          as Store
+import           System.APT.Types          hiding (urlEncode)
 import           System.IO
 
 data Options = Options
-    { optKey     :: !Key
+    { optKey     :: !Bucket
     , optFile    :: !Path
     , optTemp    :: !Path
     , optAddress :: Maybe String
@@ -41,7 +41,7 @@ data Options = Options
 
 options :: Parser Options
 options = Options
-    <$> keyOption
+    <$> bucketOption
          ( long "key"
         <> short 'k'
         <> metavar "BUCKET/PREFIX"
@@ -79,30 +79,34 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-    runMain $ \name lgr ->
-        withFile (Path.encodeString optFile) ReadMode $ \hd ->
-            runAWS AuthDiscover optDebug $ do
-                c@Control{..} <- liftEitherT
-                   $ Pkg.fromFile optTemp (Conduit.sourceHandle hd)
-                  <* liftIO (hClose hd)
 
-                S3.upload lgr name optKey c optFile
+    putStrLn "Starting..."
 
-                let url = BS.unpack $ mconcat
-                      [ "/packages/"
-                      , toBytes ctlArch
-                      , "/"
-                      , ctlPackage
-                      , "/"
-                      , ctlVersion
-                      ]
+    let path = Path.encodeString optFile
 
-                maybe (return ())
-                      (\host -> liftIO $ do
-                           let addr = host <> url
-                           say lgr name "Triggering {}" [addr]
-                           man <- newManager conduitManagerSettings
-                           rq  <- parseUrl addr
-                           void $ httpLbs (rq { method = "PATCH" }) man
-                           closeManager man)
-                      optAddress
+    putStrLn $ "Reading package description from " ++ path
+
+    p@Package{..} <- withFile path ReadMode $ \hd ->
+        runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd) >>=
+            either throwM return
+
+    s <- Store.new optKey 1 <$> loadEnv optDebug
+
+    Store.add s p [] optFile
+
+    let url = BS.unpack $ mconcat
+          [ "/packages/"
+          , toByteString pkgArch
+          , "/"
+          , toByteString pkgPackage
+          , "/"
+          , urlEncode True (toByteString pkgVersion)
+          ]
+
+    maybe (return ())
+          (\host -> withManager $ \man -> do
+               let addr = host <> url
+               liftIO . putStrLn $ "Triggering index of " ++ addr
+               rq <- parseUrl addr
+               void $ httpLbs (rq { method = "PATCH" }) man)
+          optAddress

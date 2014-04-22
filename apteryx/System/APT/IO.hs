@@ -109,11 +109,6 @@ loadEnv dbg = liftIO $
     runEitherT (loadAWSEnv AuthDiscover dbg)
         >>= either (throwM . Error) return
 
--- runMain :: Show e => IO (Either e a) -> IO ()
--- runMain f = f >>=
---     either (\ex -> hPutStr stdout (show ex) >> exitFailure)
---            (const $ putStr "Exiting..." >> exitSuccess)
-
 catchErrorT :: MonadIO m => IO a -> EitherT Error m a
 catchErrorT = EitherT
     . liftIO

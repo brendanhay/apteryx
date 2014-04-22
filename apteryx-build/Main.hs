@@ -19,7 +19,7 @@ import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.Monoid
-import           Network.AWS.S3        hiding (Bucket, Source)
+import           Network.AWS
 import           Network.HTTP.Conduit
 import           Options.Applicative
 import           System.APT.IO

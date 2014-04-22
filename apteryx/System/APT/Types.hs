@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE RecordWildCards            #-}
 
 -- Module      : System.APT.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -24,13 +23,12 @@ import           Control.Error
 import           Control.Exception
 import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
-import           Data.ByteString                  (ByteString, pack)
+import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From
 import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.CaseInsensitive             (CI)
-import           Data.Char                        (ord)
 import           Data.Int
 import           Data.Map.Strict                  (Map)
 import           Data.Monoid
@@ -43,8 +41,6 @@ import           Data.Typeable
 import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
 import           System.Logger.Message            (ToBytes(..))
-
-import qualified Network.HTTP.Types as T
 
 debExt :: Text
 debExt = ".deb"

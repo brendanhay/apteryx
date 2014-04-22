@@ -87,12 +87,6 @@ toHeaders Package{..} =
   where
     (=@) k = (CI.mk headerPrefix <> k,) . toByteString
 
-base16 :: Digest a -> ByteString
-base16 = Base16.encode . toBytes
-
-base64 :: Digest a -> ByteString
-base64 = Base64.encode . toBytes
-
 fromHeaders :: [Header] -> Either Error Package
 fromHeaders xs = join $ fromMap hs
     <$> size "content-length"
@@ -169,6 +163,12 @@ fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
         , endOfLine >> return True
         , endOfInput >> return True
         ]
+
+base16 :: Digest a -> ByteString
+base16 = Base16.encode . toBytes
+
+base64 :: Digest a -> ByteString
+base64 = Base64.encode . toBytes
 
 require :: FromByteString a
         => CI ByteString

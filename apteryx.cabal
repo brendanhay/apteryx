@@ -93,27 +93,28 @@ executable apteryx-build
         , optparse-applicative
         , transformers
 
--- executable apteryx-upload
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-upload
---     default-language:   Haskell2010
---     ghc-options:
---         -threaded
---         -Wall
---         -with-rtsopts=-T
---         -funbox-strict-fields
+executable apteryx-upload
+    main-is:            Main.hs
+    hs-source-dirs:     apteryx-upload
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-T
+        -funbox-strict-fields
 
---     build-depends:
---           amazonka
---         , apteryx
---         , base
---         , byteable
---         , bytestring
---         , conduit-extra
---         , http-conduit
---         , optparse-applicative
---         , system-filepath
---         , transformers
+    build-depends:
+          apteryx
+        , base
+        , bytestring
+        , conduit-extra
+        , either
+        , exceptions
+        , http-conduit
+        , http-types
+        , optparse-applicative
+        , system-filepath
+        , transformers
 
 -- executable apteryx-server
 --     main-is:            Main.hs
