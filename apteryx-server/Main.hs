@@ -33,11 +33,11 @@ import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder     (hPutBuilder)
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
-import           Data.Byteable
 import           Data.Conduit
 import qualified Data.Conduit.Binary         as Conduit
 import qualified Data.Conduit.Zlib           as Conduit
 import           Data.Foldable               (foldMap)
+import           Data.List                   (intersperse)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
@@ -46,7 +46,6 @@ import qualified Data.Text.Encoding          as Text
 import           Data.Word
 import           Filesystem.Path.CurrentOS   ((</>))
 import qualified Filesystem.Path.CurrentOS   as Path
-import qualified Network.APT.S3              as S3
 import           Network.AWS                 (Credentials(..), AWSEnv)
 import qualified Network.AWS                 as AWS
 import           Network.HTTP.Types
@@ -58,21 +57,25 @@ import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (concatMap, head)
 import           System.APT.IO
+import           System.APT.Index            (Index)
+import qualified System.APT.Index            as Index
 import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package          as Pkg
+import           System.APT.Store            (Store)
+import qualified System.APT.Store            as Store
 import           System.APT.Types
 import           System.Directory
 import           System.IO
 import qualified System.Logger               as Log
-import           System.LoggerT
+import           System.LoggerT              hiding (Error)
 
 default (ByteString)
 
 data Options = Options
     { optHost     :: !String
     , optPort     :: !Word16
-    , optKey      :: !Key
+    , optKey      :: !Bucket
     , optTemp     :: !Path
     , optWWW      :: !Path
     , optN        :: !Int
@@ -97,7 +100,7 @@ options = Options
         <> value 8080
          )
 
-    <*> keyOption
+    <*> bucketOption
          ( long "key"
         <> short 'k'
         <> metavar "BUCKET/PREFIX"
@@ -144,17 +147,16 @@ options = Options
 
 data Env = Env
     { appOptions :: !Options
-    , appEnv     :: AWSEnv
+    , appStore   :: Store
+    , appIndex   :: Index
     , appLogger  :: Logger
     , appLock    :: MVar ()
     }
 
 newEnv :: Options -> IO Env
-newEnv opts = do
-    e <- runEitherT $ AWS.loadAWSEnv AuthDiscover (optDebug opts)
-    Env opts <$> either error return e
-             <*> newLogger
-             <*> newMVar ()
+newEnv o@Options{..} = do
+    s <- Store.new optKey optVersions <$> loadEnv optDebug
+    Env o s <$> Index.new s <*> newLogger <*> newMVar ()
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -170,7 +172,7 @@ newtype App a = App { unApp :: ReaderT Env IO a }
              )
 
 runApp :: Env -> App a -> IO a
-runApp env = (`runReaderT` env) . unApp
+runApp e = (`runReaderT` e) . unApp
 
 instance MonadLogger App where
     logger = asks appLogger
@@ -193,8 +195,9 @@ serve o@Options{..} = do
     e <- newEnv o
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
-    middleware = GZip.gzip GZip.def . handler
-    handler  e = runHandler e . route (prepare routes)
+    middleware e = logRequest (appLogger e) . GZip.gzip GZip.def $ handler e
+    handler    e = runHandler e . route (prepare routes)
+
     settings e =
           setHost (fromString optHost)
         . setPort (fromIntegral optPort)
@@ -218,22 +221,19 @@ routes = do
     head  "/i/status" (const $ return blank) true
 
     patch "/packages/:arch/:name/:vers" reindex $
-        capture "arch" .&. capture "name" .&. capture "vers"
+            capture "arch"
+        .&. capture "name"
+        .&. capture "vers"
 
     post  "/packages" (const rebuild) true
 
     get   "/Packages"    (const $ index "Packages") true
     get   "/Packages.gz" (const $ index "Packages.gz") true
-
--- --    get   "/packages/:arch/:package" (const $ return blank) true
---     -- get   "/packages/:arch/:package/:vers" (const $ return blank) true
-
   where
     patch = addRoute "PATCH"
 
-reindex :: Arch ::: Text ::: Text -> Handler
+reindex :: Arch ::: Name ::: Vers -> Handler
 reindex (arch ::: name ::: vers) = do
-    sayT "reindex" "{}/{}/{}" [Text.decodeUtf8 $ toBytes arch, name, vers]
 --    check if file exists in S3, return 404 if not found
     return blank
 
@@ -243,99 +243,55 @@ index file = do
     sayT "index" "{}" [path]
     return $ responseFile status200 [] path Nothing
 
-
-http://www.deb-multimedia.org/dists/unstable/main/binary-amd64/Packages
-
-dist/{stable,unstable,testing}/{main,contrib,non-free}/{binary-all,binary-amd64}
-
-Add components as a csv list to x-amz-components
-Add components as flags to upload, build? intelligently copy component meta, or override
-
-
--- FIXME:
--- need to generate/serve a Realease file?
---
--- ability to specify components when uploading? should affect prefix?
---   correctly bucket/separate components in storage etc.
---
--- generate correct filename in Packages/.gz
---
--- add handler to redirect/301 to correct S3 file based on filename
---
--- repository signing
---
--- tidy up the triggering of successful reindex/rebuild
-
--- How to do an incremental rebuild? Not possible without keeping all package meta
--- in memory?
-
--- Would solve the issue of streaming to file etc - just get all keys, keep result
--- in memory, and write to disk/gzip everytime a PATCH is received.
-
--- On rebuild, try to rebuild it and if succeeds throw away and replace in memory.
-
--- Pooled repository? - Maybe not much point since non-cross compiled binaries
--- deb uri distribution [component1] [component2] [...]
--- Archive
--- The name of the distribution of Debian the packages in this directory belong to (or are designed for), i.e. stable, testing or unstable.
--- Component
--- The component of the packages in the directory, for example main, non-free, or contrib.
--- Origin
--- The name of who made the packages.
--- Label
--- Some label adequate for the packages or for your repository. Use your fantasy.
--- Architecture
--- The architecture of the packages in this directory, such as i386, sparc or source.
--- It is important to get Archive and Architecture right, as they're most used for pinning. The others are less important.
-
 rebuild :: Handler
-rebuild = do
-    e <- ask
-    p <- liftIO . isEmptyMVar $ appLock e
-    when p $ go e
-    return $ rs p
-  where
-    rs True  = plain status200 "rebuild-in-progress\n"
-    rs False = plain status202 "starting-rebuild\n"
+rebuild = return $ plain status500 "not-implemented\n"
 
-    go Env{..} = fork . lock . temp $ \path hd -> do
-        let src = Path.encodeString path
+  --   e <- ask
+  --   p <- liftIO . isEmptyMVar $ appLock e
+  --   when p $ go e
+  --   return $ rs p
+  -- where
+  --   rs True  = plain status200 "rebuild-in-progress\n"
+  --   rs False = plain status202 "starting-rebuild\n"
 
-        say appLogger "rebuild" "Starting rebuild of {}..." [src]
+  --   go Env{..} = fork . lock . temp $ \path hd -> do
+  --       let src = Path.encodeString path
 
-        hSetBinaryMode hd True
-        hSetBuffering hd (BlockBuffering Nothing)
+  --       say appLogger "rebuild" "Starting rebuild of {}..." [src]
 
-        either throwM return =<< AWS.runAWSEnv appEnv (do
-            xs <- S3.entries appLogger "rebuild" optKey optVersions
-            liftIO $ parForM optN xs metadata (either throwM (append hd)))
+  --       hSetBinaryMode hd True
+  --       hSetBuffering hd (BlockBuffering Nothing)
 
-        hClose hd <* say appLogger "rebuild" "Closed {}" [src]
-        copyFile src pkg <* say appLogger "rebuild" "Copied {}" [pkg]
+  --       either throwM return =<< AWS.runAWSEnv appEnv (do
+  --           xs <- S3.entries appLogger "rebuild" optKey optVersions
+  --           liftIO $ parForM optN xs metadata (either throwM (append hd)))
 
-        runResourceT $ Conduit.sourceFile src
-            =$ Conduit.gzip
-            $$ Conduit.sinkFile gzip
-        say appLogger "rebuild" "Compressed {}" [gzip]
-      where
-        Options{..} = appOptions
+  --       hClose hd <* say appLogger "rebuild" "Closed {}" [src]
+  --       copyFile src pkg <* say appLogger "rebuild" "Copied {}" [pkg]
 
-        fork = void . liftIO . forkIO
-        lock = withMVar appLock . const
-        temp = withTempFile optTemp ".pkg"
+  --       runResourceT $ Conduit.sourceFile src
+  --           =$ Conduit.gzip
+  --           $$ Conduit.sinkFile gzip
+  --       say appLogger "rebuild" "Compressed {}" [gzip]
+  --     where
+  --       Options{..} = appOptions
 
-        pkg  = Path.encodeString (optWWW </> "Packages")
-        gzip = Path.encodeString (optWWW </> "Packages.gz")
+  --       fork = void . liftIO . forkIO
+  --       lock = withMVar appLock . const
+  --       temp = withTempFile optTemp ".pkg"
 
-        metadata = AWS.runAWSEnv appEnv
-            . mapM (S3.metadata appLogger "meta" . entKey)
+  --       pkg  = Path.encodeString (optWWW </> "Packages")
+  --       gzip = Path.encodeString (optWWW </> "Packages.gz")
 
-        append hd xs = do
-            let ys = reverse xs
-                n  = maybe "N/A" (Text.decodeUtf8 . ctlPackage) (listToMaybe ys)
-                vs = Text.decodeUtf8 . BS.intercalate ", " $ map ctlVersion ys
-            say appLogger "index" "Indexing {} {}" [n, vs]
-            hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
+  --       metadata = AWS.runAWSEnv appEnv
+  --           . mapM (S3.metadata appLogger "meta" . entKey)
+
+  --       append hd xs = do
+  --           let ys = reverse xs
+  --               n  = maybe "N/A" (Text.decodeUtf8 . pkgPackage) (listToMaybe ys)
+  --               vs = Text.decodeUtf8 . BS.intercalate ", " $ map pkgVersion ys
+  --           say appLogger "index" "Indexing {} {}" [n, vs]
+  --           hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
@@ -356,6 +312,19 @@ onError e = case statusCode code of
         MissingField m   -> (status409, "invalid-package", encode m)
         InvalidField m   -> (status413, "invalid-package", encode m)
         ShellError _ _ m -> (status500, "invalid-package", m)
-        Exception ex     -> (status500, "server-error",    LBS.pack $ show ex)
+        Error        s   -> (status500, "server-error",    LBS.pack s)
+        Exception    ex  -> (status500, "server-error",    LBS.pack $ show ex)
 
     encode = LBS.fromStrict . Text.encodeUtf8
+
+logRequest :: Logger -> Middleware
+logRequest l app rq = line *> app rq
+  where
+    line = Log.debug l . msg
+          $ show (remoteHost rq)
+        +++ ", "
+        +++ requestMethod rq
+        +++ ' '
+        +++ rawPathInfo rq
+        +++ rawQueryString rq
+        +++ show (httpVersion rq)

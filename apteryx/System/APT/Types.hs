@@ -98,6 +98,9 @@ newtype Name = Name { unName :: ByteString }
 instance FromByteString Name where
     parser = Name <$> takeWhile1 (/= '_')
 
+instance Buildable Name where
+    build = build . Text.decodeUtf8 . unName
+
 data Vers = Vers
     { verRaw :: !ByteString
     , verNum :: [Int]
@@ -108,6 +111,9 @@ instance Ord Vers where
 
 instance ToBytes Vers where
     bytes = Build.byteString . verRaw
+
+instance Buildable Vers where
+    build = build . Text.decodeUtf8 . verRaw
 
 instance FromByteString Vers where
     parser = do
@@ -126,6 +132,11 @@ instance ToBytes Arch where
     bytes Other = "all"
     bytes Amd64 = "amd64"
     bytes I386  = "i386"
+
+instance Buildable Arch where
+    build Other = "all"
+    build Amd64 = "amd64"
+    build I386  = "i386"
 
 instance FromByteString Arch where
     parser = (string "all"   >> return Other)

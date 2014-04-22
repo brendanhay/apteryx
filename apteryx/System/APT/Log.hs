@@ -42,16 +42,16 @@ err_ :: (MonadIO m, ToBytes a, ToBytes b) => a -> b -> m ()
 err_ lbl = err logger . field (toByteString lbl)
 
 say_ :: (MonadIO m, ToBytes a, ToBytes b) => a -> b -> m ()
-say_ lbl = debug logger . field (toByteString lbl)
+say_ lbl = info logger . field (toByteString lbl)
 
 say :: (MonadIO m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
-say lbl fmt ps = debug logger . field (toByteString lbl) $ Text.format fmt ps
+say lbl fmt ps = info logger . field (toByteString lbl) $ Text.format fmt ps
 
 sayT_ :: (MonadLogger m, ToBytes a, ToBytes b) => a -> b -> m ()
-sayT_ lbl = LogT.debug . field (toByteString lbl)
+sayT_ lbl = LogT.info . field (toByteString lbl)
 
 sayT :: (MonadLogger m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
-sayT lbl fmt ps = LogT.debug . field (toByteString lbl) $ Text.format fmt ps
+sayT lbl fmt ps = LogT.info . field (toByteString lbl) $ Text.format fmt ps
 
 logger :: Logger
 logger = Unsafe.unsafePerformIO $ newLogger
