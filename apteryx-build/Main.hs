@@ -89,6 +89,7 @@ options = Options
 
 -- FIXME: Add verification to the build process
 -- Ensure number of versions is correct, metadata can be loaded
+-- Multi-threaded logging
 
 main :: IO ()
 main = do

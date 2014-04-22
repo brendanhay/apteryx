@@ -31,8 +31,6 @@ library
     exposed-modules:
           Control.Concurrent.ThreadPool
 
---        , Network.APT.S3
-
         , System.APT.IO
         , System.APT.Index
         , System.APT.Options
