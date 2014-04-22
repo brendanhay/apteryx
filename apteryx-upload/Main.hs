@@ -100,12 +100,9 @@ main = do
     say n "Uploading {} to {}" [build path, build optKey]
 
     Store.add s p [] optFile
-    maybe (return ()) (Index.reindex p) optAddress
 
     maybe (return ())
-          (\e -> do
-              say n "Triggering reindex of {}" [optAddress]
-              Index.reindex p e)
+          (\e -> say n "Triggering reindex of {}" [e] >> Index.reindex p e)
           optAddress
 
     say_ n "Done."

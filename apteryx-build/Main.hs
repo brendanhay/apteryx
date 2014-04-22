@@ -121,9 +121,7 @@ main = do
         (const $ return ())
 
     maybe (return ())
-          (\e -> do
-              say n "Triggering rebuild of {}" [optAddress]
-              Index.rebuild e)
+          (\e ->  say n "Triggering rebuild of {}" [e] >> Index.rebuild e)
           optAddress
 
     say_ n "Done."
@@ -131,7 +129,7 @@ main = do
     worker s tmp dest Entry{..} = do
         n <- (mappend "worker-") . drop 9 . show <$> myThreadId
 
-        say n "Retreiving {}" [entKey]
+        say n "Retrieving {}" [entKey]
         ctl <- Store.get s entKey $ liftEitherT . Pkg.fromFile tmp
 
         say n "Read package description from {}" [entKey]
