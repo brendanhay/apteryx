@@ -82,11 +82,10 @@ main = do
 
     putStrLn $ "Reading package description from " ++ path
 
+    s <- Store.new optKey 1 <$> loadEnv optDebug
     p <- withFile path ReadMode $ \hd ->
         runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd) >>=
             either throwM return
-
-    s <- Store.new optKey 1 <$> loadEnv optDebug
 
     Store.add s p [] optFile
 
