@@ -1,6 +1,8 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes        #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ExtendedDefaultRules       #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards            #-}
+
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -- Module      : Main
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -15,17 +17,22 @@
 module Main (main) where
 
 import           Control.Applicative
+import           Control.Concurrent
 import           Control.Concurrent.ThreadPool
+import           Data.ByteString               (ByteString)
 import           Data.Monoid
 import           Network.AWS
 import           Options.Applicative
 import           System.APT.IO
 import qualified System.APT.Index              as Index
+import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package            as Pkg
 import qualified System.APT.Store              as Store
 import           System.APT.Types
-import qualified Data.Text.IO                  as Text
+import           System.Environment
+
+default (ByteString)
 
 data Options = Options
     { optFrom     :: !Bucket
@@ -88,31 +95,42 @@ options = Options
         <> help "Print debug output."
          )
 
--- FIXME: Add verification to the build process
--- Ensure number of versions is correct, metadata can be loaded
--- Multi-threaded logging
+-- FIXME:
+--   Add verification to the build process
+--   Ensure number of versions is correct, metadata can be loaded
 
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
 
-    putStrLn "Looking for entries..."
+    n  <- getProgName
+
+    say n "Looking for entries in {}..." [optFrom]
 
     s  <- Store.new optFrom optVersions <$> loadEnv optDebug
     xs <- Store.entries s
 
-    putStrLn $ "Found " ++ show (length xs) ++ " unique package names."
-    mapM_ (Text.putStrLn . mappend "Found " . objKey . entKey) (concat xs)
-    putStrLn "Copying..."
+    say n "Discovered {} package groups." [length xs]
+
+    mapM_ (\e -> say n "Found {}" [objKey $ entKey e]) (concat xs)
+
+    say n "Copying to {}..." [optTo]
 
     parForM optN (concat xs)
-        (build s optTemp optTo)
+        (worker s optTemp optTo)
         (const $ return ())
 
     maybe (return ()) Index.rebuild optAddress
 
-    putStrLn "Done."
+    say_ n "Done."
   where
-    build s tmp dest Entry{..} = do
+    worker s tmp dest Entry{..} = do
+        n <- (mappend "worker-") . drop 9 . show <$> myThreadId
+
+        say n "Retreiving {}" [entKey]
         ctl <- Store.get s entKey $ liftEitherT . Pkg.fromFile tmp
+
+        say n "Read package description from {}" [entKey]
         Store.copy s entKey ctl dest
+
+        say n "Copyied {} to {}" [build entKey, build dest]

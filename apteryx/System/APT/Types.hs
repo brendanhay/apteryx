@@ -34,6 +34,7 @@ import           Data.Map.Strict                  (Map)
 import           Data.Monoid
 import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
+import           Data.Text.Buildable
 import qualified Data.Text.Encoding               as Text
 import qualified Data.Text.Lazy                   as LText
 import qualified Data.Text.Lazy.Builder           as LBuild
@@ -76,6 +77,9 @@ instance ToBytes Bucket where
     bytes (Bucket b p) = Build.byteString $
         Text.encodeUtf8 b <> "/" <> Text.encodeUtf8 p
 
+instance Buildable Bucket where
+    build (Bucket b p) = build (b <> "/" <> p)
+
 newtype Object = Object Text
     deriving (Eq, Show)
 
@@ -83,7 +87,10 @@ objKey :: Object -> Text
 objKey (Object o) = urlEncode o
 
 instance ToBytes Object where
-    bytes (Object o) = Build.byteString (Text.encodeUtf8 o)
+    bytes = Build.byteString . Text.encodeUtf8 . objKey
+
+instance Buildable Object where
+    build = build . objKey
 
 newtype Name = Name { unName :: ByteString }
     deriving (Eq, Ord, Show, ToBytes)

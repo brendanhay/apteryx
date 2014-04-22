@@ -1,5 +1,8 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ExtendedDefaultRules       #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards            #-}
+
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -- Module      : Main
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -15,17 +18,22 @@ module Main (main) where
 
 import           Control.Monad.Catch
 import           Control.Monad.Trans.Either
-import qualified Data.Conduit.Binary       as Conduit
+import           Data.ByteString            (ByteString)
+import qualified Data.Conduit.Binary        as Conduit
 import           Data.Monoid
-import qualified Filesystem.Path.CurrentOS as Path
+import qualified Filesystem.Path.CurrentOS  as Path
 import           Options.Applicative
 import           System.APT.IO
-import qualified System.APT.Index          as Index
+import qualified System.APT.Index           as Index
+import           System.APT.Log
 import           System.APT.Options
-import qualified System.APT.Package        as Pkg
-import qualified System.APT.Store          as Store
-import           System.APT.Types          hiding (urlEncode)
+import qualified System.APT.Package         as Pkg
+import qualified System.APT.Store           as Store
+import           System.APT.Types           hiding (urlEncode)
+import           System.Environment
 import           System.IO
+
+default (ByteString)
 
 data Options = Options
     { optKey     :: !Bucket
@@ -76,19 +84,23 @@ main :: IO ()
 main = do
     Options{..} <- parseOptions options
 
-    putStrLn "Starting..."
+    n <- getProgName
+
+    say_ n "Starting..."
 
     let path = Path.encodeString optFile
 
-    putStrLn $ "Reading package description from " ++ path
+    say n "Reading package description from {}" [path]
 
     s <- Store.new optKey 1 <$> loadEnv optDebug
     p <- withFile path ReadMode $ \hd ->
         runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd) >>=
             either throwM return
 
+    say n "Uploading {} to {}" [build path, build optKey]
+
     Store.add s p [] optFile
 
     maybe (return ()) (Index.reindex p) optAddress
 
-    putStrLn "Done."
+    say_ n "Done."

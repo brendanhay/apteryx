@@ -30,9 +30,9 @@ library
 
     exposed-modules:
           Control.Concurrent.ThreadPool
-
         , System.APT.IO
         , System.APT.Index
+        , System.APT.Log
         , System.APT.Options
         , System.APT.Package
         , System.APT.Store
@@ -86,9 +86,9 @@ executable apteryx-build
           amazonka
         , apteryx
         , base
+        , bytestring
         , conduit
         , optparse-applicative
-        , text
 
 executable apteryx-upload
     main-is:            Main.hs
@@ -103,6 +103,7 @@ executable apteryx-upload
     build-depends:
           apteryx
         , base
+        , bytestring
         , conduit-extra
         , either
         , exceptions
