@@ -52,6 +52,7 @@ import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.Gzip as GZip
+import qualified Network.Wai.Middleware.RequestLogger (logStdout)
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
@@ -318,14 +319,19 @@ onError e = case statusCode code of
     encode = LBS.fromStrict . Text.encodeUtf8
 
 logRequest :: Logger -> Middleware
-logRequest l app rq = line *> app rq
-  where
-    line = Log.debug l . msg
-          $ show (remoteHost rq)
-        +++ " -> "
-        +++ requestMethod rq
+logRequest l app rq = do
+    rs <- app rq
+    Log.debug l . msg $ requestMethod rq
         +++ ' '
         +++ rawPathInfo rq
         +++ rawQueryString rq
         +++ ' '
         +++ show (httpVersion rq)
+        +++ " ["
+        +++ statusCode (responseStatus rs)
+        +++ "] \""
+        +++ fromMaybe mempty (lookup "user-agent" $ requestHeaders rq)
+        +++ "\" \""
+        +++ fromMaybe mempty (lookup "referer" $ requestHeaders rq)
+        +++ '"'
+    return rs
