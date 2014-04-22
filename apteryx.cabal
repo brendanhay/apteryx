@@ -88,6 +88,7 @@ executable apteryx-build
         , base
         , conduit
         , optparse-applicative
+        , text
 
 executable apteryx-upload
     main-is:            Main.hs

@@ -25,6 +25,7 @@ import           System.APT.Options
 import qualified System.APT.Package            as Pkg
 import qualified System.APT.Store              as Store
 import           System.APT.Types
+import qualified Data.Text.IO                  as Text
 
 data Options = Options
     { optFrom     :: !Bucket
@@ -100,7 +101,8 @@ main = do
     s  <- Store.new optFrom optVersions <$> loadEnv optDebug
     xs <- Store.entries s
 
-    putStrLn $ "Found " ++ show (length xs) ++ " entries."
+    putStrLn $ "Found " ++ show (length xs) ++ " unique package names."
+    mapM_ (Text.putStrLn . mappend "Found " . objKey . entKey) (concat xs)
     putStrLn "Copying..."
 
     parForM optN (concat xs)
