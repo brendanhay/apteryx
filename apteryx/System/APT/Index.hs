@@ -55,7 +55,6 @@ insert = undefined
 -- | Trigger a remote rebuild of the index.
 rebuild :: MonadIO m => String -> m ()
 rebuild host = liftIO $ do
-    putStrLn $ "Triggering rebuild of " ++ addr
     rq <- parseUrl addr
     _  <- withManager $ httpLbs (rq { method = "POST" })
     return ()
@@ -65,7 +64,6 @@ rebuild host = liftIO $ do
 -- | Trigger a remote reindex of a specified package.
 reindex :: MonadIO m => Package -> String -> m ()
 reindex Package{..} host = liftIO $ do
-    putStrLn $ "Triggering reindex of " ++ addr
     rq <- parseUrl addr
     _  <- withManager $ httpLbs (rq { method = "PATCH" })
     return ()

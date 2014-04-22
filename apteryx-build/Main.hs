@@ -120,7 +120,11 @@ main = do
         (worker s optTemp optTo)
         (const $ return ())
 
-    maybe (return ()) Index.rebuild optAddress
+    maybe (return ())
+          (\e -> do
+              say n "Triggering rebuild of {}" [optAddress]
+              Index.rebuild e)
+          optAddress
 
     say_ n "Done."
   where
