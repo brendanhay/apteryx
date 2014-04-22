@@ -30,8 +30,10 @@ import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Base16           as Base16
 import qualified Data.ByteString.Base64           as Base64
-import           Data.ByteString.Builder
+import           Data.ByteString.Builder          (Builder)
+import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
+import           Data.ByteString.From             (FromByteString)
 import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
@@ -50,18 +52,21 @@ import           System.APT.IO
 import           System.APT.Types
 import           System.IO                        (hClose)
 
-toBuilder :: Control -> Builder
-toBuilder Control{..} = (<> "\n") . mconcat . intersperse "\n" $
-    [ "Package: "      =@ ctlPackage
-    , "Version: "      =@ ctlVersion
-    , "Architecture: " =@ toBytes ctlArch
-    , "Size: "         =@ toBytes ctlSize
-    , "MD5Sum: "       =@ base16 ctlMD5Sum
-    , "SHA1: "         =@ base16 ctlSHA1
-    , "SHA256: "       =@ base16 ctlSHA256
-    ] ++ map (byteString . line) (Map.toList ctlOptional)
+-- Binary packages:
+-- They always follow a rigid naming convention: package-name_version_arch.deb.
+
+toBuilder :: Package -> Builder
+toBuilder Package{..} = (<> "\n") . mconcat . intersperse "\n" $
+    [ "Package: "      =@ pkgPackage
+    , "Version: "      =@ pkgVersion
+    , "Architecture: " =@ toByteString pkgArch
+    , "Size: "         =@ toByteString pkgSize
+    , "MD5Sum: "       =@ base16 pkgMD5Sum
+    , "SHA1: "         =@ base16 pkgSHA1
+    , "SHA256: "       =@ base16 pkgSHA256
+    ] ++ map (Build.byteString . line) (Map.toList pkgOptional)
   where
-    (=@) k = mappend k . byteString
+    (=@) k = mappend k . bytes
 
     line (k, v) = upcase (CI.original k) <> ": " <> v
 
@@ -69,26 +74,26 @@ toBuilder Control{..} = (<> "\n") . mconcat . intersperse "\n" $
         | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
         | otherwise                   = k
 
-toHeaders :: Control -> [Header]
-toHeaders Control{..} =
-    [ ("content-md5",  base64 ctlMD5Sum)
+toHeaders :: Package -> [Header]
+toHeaders Package{..} =
+    [ ("content-md5",  base64 pkgMD5Sum)
     , ("content-type", "application/x-deb")
-    ] ++ [ "package"      =@ ctlPackage
-         , "version"      =@ ctlVersion
-         , "architecture" =@ toBytes ctlArch
-         , "sha1"         =@ base16 ctlSHA1
-         , "sha256"       =@ base16 ctlSHA256
+    ] ++ [ "package"      =@ pkgPackage
+         , "version"      =@ pkgVersion
+         , "architecture" =@ toByteString pkgArch
+         , "sha1"         =@ base16 pkgSHA1
+         , "sha256"       =@ base16 pkgSHA256
          ]
   where
-    (=@) k = (CI.mk headerPrefix <> k,)
+    (=@) k = (CI.mk headerPrefix <> k,) . toByteString
 
-base16 :: Byteable a => a -> ByteString
+base16 :: Digest a -> ByteString
 base16 = Base16.encode . toBytes
 
-base64 :: Byteable a => a -> ByteString
+base64 :: Digest a -> ByteString
 base64 = Base64.encode . toBytes
 
-fromHeaders :: [Header] -> Either Error Control
+fromHeaders :: [Header] -> Either Error Package
 fromHeaders xs = join $ fromMap hs
     <$> size "content-length"
     <*> digest "etag" (BS.init . BS.tail)
@@ -110,11 +115,11 @@ fromMap :: Map (CI ByteString) ByteString
         -> Digest MD5
         -> Digest SHA1
         -> Digest SHA256
-        -> Either Error Control
-fromMap fs size md5 sha1 sha256 = Control
+        -> Either Error Package
+fromMap fs size md5 sha1 sha256 = Package
     <$> require "package" fs
     <*> require "version" fs
-    <*> (archFromBS <$> require "architecture" fs)
+    <*> require "architecture" fs
     <*> pure size
     <*> pure md5
     <*> pure sha1
@@ -139,9 +144,9 @@ fromMap fs size md5 sha1 sha256 = Control
         ]
 
 fromFile :: MonadIO m
-            => Path
-            -> Source IO ByteString
-            -> EitherT Error m Control
+         => Path
+         -> Source IO ByteString
+         -> EitherT Error m Package
 fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
     catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
     let f = Path.encodeString path
@@ -165,11 +170,13 @@ fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
         , endOfInput >> return True
         ]
 
-require :: CI ByteString
+require :: FromByteString a
+        => CI ByteString
         -> Map (CI ByteString) ByteString
-        -> Either Error ByteString
+        -> Either Error a
 require k m =
-    maybe (Left . MissingField . Text.decodeUtf8 $ CI.original k) Right
+    maybe (Left . MissingField . Text.decodeUtf8 $ CI.original k)
+          fromByteString
           (Map.lookup k m)
 
 field :: (a -> b) -> Parser a -> ByteString -> Either Error b

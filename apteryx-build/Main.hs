@@ -17,28 +17,20 @@ module Main (main) where
 import           Control.Applicative
 import           Control.Concurrent.ThreadPool
 import           Control.Monad
-import           Control.Monad.Catch
 import           Control.Monad.IO.Class
-import           Control.Monad.Morph
-import           Data.Conduit
-import           Data.Either
 import           Data.Monoid
-import qualified Data.Text             as Text
-import qualified Data.Text.Encoding    as Text
-import qualified Network.APT.S3        as S3
-import           Network.AWS.S3
+import           Network.AWS.S3        hiding (Bucket, Source)
 import           Network.HTTP.Conduit
-import           Network.HTTP.Types
 import           Options.Applicative
 import           System.APT.IO
-import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package    as Pkg
+import qualified System.APT.Store      as Store
 import           System.APT.Types
 
 data Options = Options
-    { optFrom     :: !Key
-    , optTo       :: !Key
+    { optFrom     :: !Bucket
+    , optTo       :: !Bucket
     , optTemp     :: !Path
     , optAddress  :: Maybe String
     , optN        :: !Int
@@ -48,13 +40,13 @@ data Options = Options
 
 options :: Parser Options
 options = Options
-    <$> keyOption
+    <$> bucketOption
          ( long "from"
         <> metavar "BUCKET/PREFIX"
         <> help "Source S3 bucket and optional prefix to traverse for packages. [required]"
          )
 
-    <*> keyOption
+    <*> bucketOption
          ( long "to"
         <> metavar "BUCKET/PREFIX"
         <> help "Destination S3 bucket and optional prefix to store packages. [required]"
@@ -102,43 +94,30 @@ options = Options
 
 main :: IO ()
 main = do
-    o@Options{..} <- parseOptions options
-    runMain $ \name lgr -> do
-        rs <- runAWS AuthDiscover optDebug $ do
-            xs  <- S3.entries lgr name optFrom optVersions
-            env <- getEnv
-            liftIO $ parForM optN (concat xs)
-                (runEnv env . build lgr o)
-                (const $ return ())
+    Options{..} <- parseOptions options
 
-        when (isRight rs) $ do
-            maybe (return ())
-                  (\host -> withManager $ \man -> do
-                       let addr = host <> "/packages"
-                       say lgr name "Triggering {}" [addr]
-                       rq <- parseUrl addr
-                       void $ httpLbs (rq { method = "POST" }) man)
-                  optAddress
+    putStrLn "Looking for entries..."
 
-        return rs
+    s  <- Store.new optFrom optVersions <$> loadEnv optDebug
+    xs <- Store.entries s
 
-build :: Logger -> Options -> Entry -> AWS ()
-build lgr Options{..} Entry{..} = do
-    say lgr name "Retrieving {}" [entKey]
-    rs   <- send $ GetObject (keyBucket entKey) (keyPrefix entKey) []
-    (bdy, f) <- unwrapResumable (responseBody rs)
+    putStrLn $ "Found " ++ show (length xs) ++ " entries."
+    putStrLn "Copying..."
 
-    say lgr name "Parsing control from {}" [entKey]
-    env  <- getEnv
-    ctl  <- liftEitherT (Pkg.fromFile optTemp (aws env bdy)) `finally` f
+    parForM optN (concat xs)
+        (build s optTemp optTo)
+        (const $ return ())
 
-    code <- status <$> S3.copy lgr name entKey ctl optTo
-    say lgr name "Completed {}" [code]
+    maybe (return ())
+          (\host -> withManager $ \man -> do
+               let addr = host <> "/packages"
+               liftIO . putStrLn $ "Triggering rebuild of " ++ addr
+               rq <- parseUrl addr
+               void $ httpLbs (rq { method = "POST" }) man)
+          optAddress
+
+    putStrLn "Done."
   where
-    status = Text.pack . show . statusCode . responseStatus
-
-    name = Text.encodeUtf8
-        . Text.drop 1
-        $ Text.dropWhile (/= '/') (keyPrefix entKey)
-
-    aws e = hoist $ either throwM return <=< runEnv e
+    build s tmp dest Entry{..} = do
+        ctl <- Store.get s entKey $ liftEitherT . Pkg.fromFile tmp
+        Store.copy s entKey ctl dest

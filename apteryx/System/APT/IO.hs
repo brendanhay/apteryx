@@ -16,7 +16,6 @@
 
 module System.APT.IO where
 
-import           Control.Applicative
 import           Control.Concurrent.Async
 import           Control.DeepSeq
 import           Control.Error
@@ -27,13 +26,11 @@ import           Control.Monad.IO.Class
 import           Crypto.Hash
 import qualified Crypto.Hash.Conduit        as Crypto
 import           Data.ByteString            (ByteString)
-import qualified Data.ByteString.Char8      as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import qualified Filesystem.Path.CurrentOS  as Path
-import           System.APT.Log
+import           Network.AWS                hiding (async)
 import           System.APT.Types
 import           System.Directory
-import           System.Environment
 import           System.Exit
 import           System.IO
 import           System.Posix.Files
@@ -107,14 +104,15 @@ runShellT cmd = do
         , std_err = CreatePipe
         }
 
-runMain :: Show e => (ByteString -> Logger -> IO (Either e a)) -> IO ()
-runMain f = do
-    name <- BS.pack <$> getProgName
-    lgr  <- newLogger
-    rs   <- f name lgr
-    either (\ex -> err_ lgr name (show ex) >> exitFailure)
-           (const $ say_ lgr name "Exiting..." >> exitSuccess)
-           rs
+loadEnv :: (MonadThrow m, MonadIO m) => Bool -> m AWSEnv
+loadEnv dbg = liftIO $
+    runEitherT (loadAWSEnv AuthDiscover dbg)
+        >>= either (throwM . Error) return
+
+-- runMain :: Show e => IO (Either e a) -> IO ()
+-- runMain f = f >>=
+--     either (\ex -> hPutStr stdout (show ex) >> exitFailure)
+--            (const $ putStr "Exiting..." >> exitSuccess)
 
 catchErrorT :: MonadIO m => IO a -> EitherT Error m a
 catchErrorT = EitherT

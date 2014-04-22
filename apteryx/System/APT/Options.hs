@@ -30,5 +30,10 @@ textOption = fmap Text.pack . strOption
 pathOption :: Mod OptionFields String -> Parser Path
 pathOption = fmap Path.decodeString . strOption
 
-keyOption :: Mod OptionFields String -> Parser Key
-keyOption = fmap (mkKey . Text.pack) . strOption
+bucketOption :: Mod OptionFields String -> Parser Bucket
+bucketOption = fmap (mk . Text.pack) . strOption
+  where
+    mk t =
+        case Text.split (== '/') t of
+            []     -> error "Bucket cannot be blank."
+            (x:xs) -> Bucket x (Text.intercalate "/" xs)

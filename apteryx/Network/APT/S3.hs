@@ -28,7 +28,7 @@ import           Data.Char                 (isDigit)
 import           Data.Conduit
 import qualified Data.Conduit.List         as Conduit
 import           Data.Function             (on)
-import           Data.List                 (sortBy)
+import           Data.List                 (sortBy,)
 import qualified Data.Map.Strict           as Map
 import           Data.Monoid
 import           Data.Ord

@@ -11,7 +11,7 @@
 -- Portability : non-portable (GHC extensions)
 
 module System.APT.Log
-    ( Logger
+    (a Logger
     , newLogger
 
     , err_

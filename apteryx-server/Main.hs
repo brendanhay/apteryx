@@ -243,35 +243,14 @@ index file = do
     sayT "index" "{}" [path]
     return $ responseFile status200 [] path Nothing
 
--- How to do an incremental rebuild? Not possible without keeping all package meta
--- in memory?
 
--- Would solve the issue of streaming to file etc - just get all keys, keep result
--- in memory, and write to disk/gzip everytime a PATCH is received.
+http://www.deb-multimedia.org/dists/unstable/main/binary-amd64/Packages
 
--- On rebuild, try to rebuild it and if succeeds throw away and replace in memory.
+dist/{stable,unstable,testing}/{main,contrib,non-free}/{binary-all,binary-amd64}
 
--- Pooled repository? - Maybe not much point since non-cross compiled binaries
+Add components as a csv list to x-amz-components
+Add components as flags to upload, build? intelligently copy component meta, or override
 
--- deb uri distribution [component1] [component2] [...]
-
--- Archive: archive
--- Component: component
--- Origin: YourCompany
--- Label: YourCompany Debian repository
--- Architecture: architecture
--- Archive
--- The name of the distribution of Debian the packages in this directory belong to (or are designed for), i.e. stable, testing or unstable.
-
--- Component
--- The component of the packages in the directory, for example main, non-free, or contrib.
--- Origin
--- The name of who made the packages.
--- Label
--- Some label adequate for the packages or for your repository. Use your fantasy.
--- Architecture
--- The architecture of the packages in this directory, such as i386, sparc or source.
--- It is important to get Archive and Architecture right, as they're most used for pinning. The others are less important.
 
 -- FIXME:
 -- need to generate/serve a Realease file?
@@ -286,6 +265,28 @@ index file = do
 -- repository signing
 --
 -- tidy up the triggering of successful reindex/rebuild
+
+-- How to do an incremental rebuild? Not possible without keeping all package meta
+-- in memory?
+
+-- Would solve the issue of streaming to file etc - just get all keys, keep result
+-- in memory, and write to disk/gzip everytime a PATCH is received.
+
+-- On rebuild, try to rebuild it and if succeeds throw away and replace in memory.
+
+-- Pooled repository? - Maybe not much point since non-cross compiled binaries
+-- deb uri distribution [component1] [component2] [...]
+-- Archive
+-- The name of the distribution of Debian the packages in this directory belong to (or are designed for), i.e. stable, testing or unstable.
+-- Component
+-- The component of the packages in the directory, for example main, non-free, or contrib.
+-- Origin
+-- The name of who made the packages.
+-- Label
+-- Some label adequate for the packages or for your repository. Use your fantasy.
+-- Architecture
+-- The architecture of the packages in this directory, such as i386, sparc or source.
+-- It is important to get Archive and Architecture right, as they're most used for pinning. The others are less important.
 
 rebuild :: Handler
 rebuild = do
