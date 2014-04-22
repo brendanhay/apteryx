@@ -89,9 +89,7 @@ executable apteryx-build
         , apteryx
         , base
         , conduit
-        , http-conduit
         , optparse-applicative
-        , transformers
 
 executable apteryx-upload
     main-is:            Main.hs
@@ -106,15 +104,11 @@ executable apteryx-upload
     build-depends:
           apteryx
         , base
-        , bytestring
         , conduit-extra
         , either
         , exceptions
-        , http-conduit
-        , http-types
         , optparse-applicative
         , system-filepath
-        , transformers
 
 -- executable apteryx-server
 --     main-is:            Main.hs

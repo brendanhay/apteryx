@@ -16,16 +16,14 @@ module Main (main) where
 
 import           Control.Applicative
 import           Control.Concurrent.ThreadPool
-import           Control.Monad
-import           Control.Monad.IO.Class
 import           Data.Monoid
 import           Network.AWS
-import           Network.HTTP.Conduit
 import           Options.Applicative
 import           System.APT.IO
+import qualified System.APT.Index              as Index
 import           System.APT.Options
-import qualified System.APT.Package    as Pkg
-import qualified System.APT.Store      as Store
+import qualified System.APT.Package            as Pkg
+import qualified System.APT.Store              as Store
 import           System.APT.Types
 
 data Options = Options
@@ -108,13 +106,7 @@ main = do
         (build s optTemp optTo)
         (const $ return ())
 
-    maybe (return ())
-          (\host -> withManager $ \man -> do
-               let addr = host <> "/packages"
-               liftIO . putStrLn $ "Triggering rebuild of " ++ addr
-               rq <- parseUrl addr
-               void $ httpLbs (rq { method = "POST" }) man)
-          optAddress
+    maybe (return ()) Index.rebuild optAddress
 
     putStrLn "Done."
   where

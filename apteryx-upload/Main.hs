@@ -13,18 +13,14 @@
 
 module Main (main) where
 
-import           Control.Monad
 import           Control.Monad.Catch
-import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Either
-import qualified Data.ByteString.Char8     as BS
 import qualified Data.Conduit.Binary       as Conduit
 import           Data.Monoid
 import qualified Filesystem.Path.CurrentOS as Path
-import           Network.HTTP.Conduit
-import           Network.HTTP.Types        (urlEncode)
 import           Options.Applicative
 import           System.APT.IO
+import qualified System.APT.Index          as Index
 import           System.APT.Options
 import qualified System.APT.Package        as Pkg
 import qualified System.APT.Store          as Store
@@ -86,7 +82,7 @@ main = do
 
     putStrLn $ "Reading package description from " ++ path
 
-    p@Package{..} <- withFile path ReadMode $ \hd ->
+    p <- withFile path ReadMode $ \hd ->
         runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd) >>=
             either throwM return
 
@@ -94,19 +90,6 @@ main = do
 
     Store.add s p [] optFile
 
-    let url = BS.unpack $ mconcat
-          [ "/packages/"
-          , toByteString pkgArch
-          , "/"
-          , toByteString pkgPackage
-          , "/"
-          , urlEncode True (toByteString pkgVersion)
-          ]
+    maybe (return ()) (Index.reindex p) optAddress
 
-    maybe (return ())
-          (\host -> withManager $ \man -> do
-               let addr = host <> url
-               liftIO . putStrLn $ "Triggering index of " ++ addr
-               rq <- parseUrl addr
-               void $ httpLbs (rq { method = "PATCH" }) man)
-          optAddress
+    putStrLn "Done."
