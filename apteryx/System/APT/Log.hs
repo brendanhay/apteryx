@@ -36,7 +36,7 @@ import           System.LoggerT          (MonadLogger)
 import qualified System.LoggerT          as LogT
 
 newLogger :: IO Logger
-newLogger = new defSettings
+newLogger = new $ defSettings { bufSize = 0 }
 
 err_ :: (MonadIO m, ToBytes a, ToBytes b) => a -> b -> m ()
 err_ lbl = err logger . field (toByteString lbl)

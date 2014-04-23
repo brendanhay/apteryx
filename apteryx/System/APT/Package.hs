@@ -44,8 +44,6 @@ import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
-import qualified Data.Text                        as Text
-import qualified Data.Text.Encoding               as Text
 import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.HTTP.Types.Header
 import           System.APT.IO
@@ -57,7 +55,7 @@ import           System.IO                        (hClose)
 
 toBuilder :: Package -> Builder
 toBuilder Package{..} = (<> "\n") . mconcat . intersperse "\n" $
-    [ "Package: "      =@ pkgPackage
+    [ "Package: "      =@ pkgName
     , "Version: "      =@ pkgVersion
     , "Architecture: " =@ toByteString pkgArch
     , "Size: "         =@ toByteString pkgSize
@@ -78,7 +76,7 @@ toHeaders :: Package -> [Header]
 toHeaders Package{..} =
     [ ("content-md5",  base64 pkgMD5Sum)
     , ("content-type", "application/x-deb")
-    ] ++ [ "package"      =@ pkgPackage
+    ] ++ [ "package"      =@ pkgName
          , "version"      =@ pkgVersion
          , "architecture" =@ toByteString pkgArch
          , "sha1"         =@ base16 pkgSHA1
@@ -99,7 +97,7 @@ fromHeaders xs = join $ fromMap hs
     digest k f = require k hs >>= \e ->
         let bs  = fst . Base16.decode $ f e
             msg = "Unable to read digest: " <> CI.original k <> " " <> bs
-         in note (InvalidField $ Text.decodeUtf8 msg)
+         in note (invalidField msg)
                  (digestFromByteString bs)
 
     hs = Map.fromList $ map (first stripPrefix) xs
@@ -175,12 +173,12 @@ require :: FromByteString a
         -> Map (CI ByteString) ByteString
         -> Either Error a
 require k m =
-    maybe (Left . MissingField . Text.decodeUtf8 $ CI.original k)
+    maybe (Left . missingField $ CI.original k)
           fromByteString
           (Map.lookup k m)
 
 field :: (a -> b) -> Parser a -> ByteString -> Either Error b
-field f p = fmapL (InvalidField . Text.pack) . fmap f . parseOnly p
+field f p = fmapL (invalidField . BS.pack) . fmap f . parseOnly p
 
 headerPrefix :: ByteString
 headerPrefix = "x-amz-meta-"

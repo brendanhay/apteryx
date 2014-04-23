@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ViewPatterns      #-}
 
 -- Module      : System.APT.Store
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -22,6 +23,7 @@ module System.APT.Store
     , metadata
     ) where
 
+import           Control.Applicative
 import           Control.Error
 import           Control.Monad
 import           Control.Monad.Catch
@@ -46,6 +48,7 @@ import           Network.HTTP.Conduit
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
+
 -- | Structure:
 --
 -- +-arbitrary prefix
@@ -68,36 +71,34 @@ new :: Bucket -> Int -> AWSEnv -> Store
 new = Store
 
 -- | Given a package description and contents, upload the file to S3.
-add :: MonadIO m => Store -> Package -> [Text] -> Path -> m ()
-add s pkg cs path = aws s $
+add :: MonadIO m => Package -> Path -> Store -> m ()
+add p@Package{..} (Path.encodeString -> path) s = aws s $
     send_ PutObject
         { poBucket  = bkt
         , poKey     = key
-        , poHeaders = Pkg.toHeaders pkg
-        , poBody    = requestBodySource size (Conduit.sourceFile file)
+        , poHeaders = Pkg.toHeaders p
+        , poBody    = requestBodySource (unSize pkgSize) (Conduit.sourceFile path)
         }
   where
-    (bkt, key) = location (_bucket s) pkg cs
+    (bkt, key) = location (_bucket s) pkgArch pkgName pkgVersion []
 
-    size = unSize $ pkgSize pkg
-    file = Path.encodeString path
-
-get :: (MonadThrow m, MonadIO m)
-    => Store
-    -> Object
+get :: MonadIO m
+    => Object
     -> (Source IO ByteString -> AWS a)
-    -> m a
-get s o f = aws s $ do
+    -> Store
+    -> m (Maybe a)
+get o f s = aws s $ do
     e  <- getEnv
-    rs <- send GetObject
+    rs <- hush <$> sendCatch GetObject
         { goBucket  = bktBucket
         , goKey     = bktPrefix <> "/" <> objKey o
         , goHeaders = []
         }
-
-    (bdy, g) <- unwrapResumable (responseBody rs)
-
-    f (hoist_ e bdy) `finally` g
+    maybe (return Nothing)
+          (\x -> do
+              (bdy, g) <- unwrapResumable (responseBody x)
+              (Just <$> f (hoist_ e bdy)) `finally` g)
+          rs
   where
     Bucket{..} = _bucket s
 
@@ -105,18 +106,18 @@ get s o f = aws s $ do
 
 -- | Copy an object from the store, to another location in S3,
 --   overriding the metadata with the supplied package description.
-copy :: MonadIO m => Store -> Object -> Package -> Bucket -> m ()
-copy s o pkg to = aws s $
+copy :: MonadIO m => Object -> Package -> Bucket -> Store -> m ()
+copy o p@Package{..} to s = aws s $
     send_ PutObjectCopy
         { pocBucket    = bkt
         , pocKey       = key
         , pocSource    = src
         , pocDirective = Replace
-        , pocHeaders   = Pkg.toHeaders pkg
+        , pocHeaders   = Pkg.toHeaders p
         }
   where
     -- FIXME: components need to be taken into account
-    (bkt, key) = location to pkg []
+    (bkt, key) = location to pkgArch pkgName pkgVersion []
 
     src  = bktBucket (_bucket s) <> "/" <> objKey o
 
@@ -154,26 +155,27 @@ entries s = aws s $ paginate start
         . mappend xs
 
 -- | Lookup the metadata for a specific entry.
-metadata :: MonadIO m => Store -> Object -> m (Maybe Package)
-metadata s o = aws s $ do
-    rs <- send HeadObject
-        { hoBucket  = bktBucket
-        , hoKey     = bktPrefix <> "/" <> objKey o
+metadata :: MonadIO m
+         => Arch
+         -> Name
+         -> Vers
+         -> Store
+         -> m (Maybe Package)
+metadata a n v s = aws s $ do
+    rs <- hush <$> sendCatch HeadObject
+        { hoBucket  = bkt
+        , hoKey     = key
         , hoHeaders = []
         }
-    return . hush . Pkg.fromHeaders $ responseHeaders rs
+    maybe (return Nothing)
+          (return . hush . Pkg.fromHeaders . responseHeaders)
+          rs
   where
-    Bucket{..} = _bucket s
+    (bkt, key) = location (_bucket s) a n v []
 
--- FIXME: proper error handling
--- | Run an AWS action using the store's environment.
-aws :: MonadIO m => Store -> AWS a -> m a
-aws s m = liftIO (runAWSEnv (_env s) m) >>= either (error . show) return
-
--- | Given a package description, return the raw bucket and object key
---   of the file in S3.
-location :: Bucket -> Package -> [Text] -> (Text, Text)
-location Bucket{..} Package{..} cs = (bktBucket, file)
+-- | Determine the location of a file in S3.
+location :: Bucket -> Arch -> Name -> Vers -> [Text] -> (Text, Text)
+location Bucket{..} a n v cs = (bktBucket, file)
   where
     file = Text.concat
         [ root
@@ -181,15 +183,20 @@ location Bucket{..} Package{..} cs = (bktBucket, file)
         , "/"
         , name
         , "_"
-        , urlEncode . Text.decodeUtf8 $ verRaw pkgVersion
+        , urlEncode . Text.decodeUtf8 $ verRaw v
         , "_"
-        , Text.decodeUtf8 (toByteString pkgArch)
+        , Text.decodeUtf8 (toByteString a)
         , ".deb"
         ]
 
-    name = Text.decodeUtf8 (unName pkgPackage)
+    name = Text.decodeUtf8 (unName n)
 
     root = mappend bktPrefix $
         case cs of
             [] -> "/pool/"
             _  -> "/override/" <> Text.intercalate "/" cs <> "/"
+
+-- FIXME: proper error handling
+-- | Run an AWS action using the store's environment.
+aws :: MonadIO m => Store -> AWS a -> m a
+aws s m = liftIO (runAWSEnv (_env s) m) >>= either (error . show) return

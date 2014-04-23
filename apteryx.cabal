@@ -67,7 +67,7 @@ library
         , system-filepath
         , text
         , text-format
-        , tinylog
+        , tinylog              >= 0.7.2
         , transformers
         , unix
 

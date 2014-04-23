@@ -30,7 +30,7 @@ import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.Resource
 import           Data.ByteString             (ByteString)
-import           Data.ByteString.Builder     (hPutBuilder)
+import qualified Data.ByteString.Builder     as Build
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Conduit
@@ -182,6 +182,9 @@ instance MonadLogger (EitherT e App) where
     logger = lift logger
     prefix = lift prefix
 
+instance MonadThrow (EitherT e App) where
+    throwM = lift . throwM
+
 type Handler = EitherT Error App Response
 
 runHandler :: Env -> Handler -> IO Response
@@ -221,25 +224,27 @@ routes = do
     get   "/i/status" (const $ return blank) true
     head  "/i/status" (const $ return blank) true
 
-    patch "/packages/:arch/:name/:vers" reindex $
+    patch "/packages/:arch/:name/:vers" addEntry $
             capture "arch"
         .&. capture "name"
         .&. capture "vers"
 
     post  "/packages" (const rebuild) true
 
-    get   "/Packages"    (const $ index "Packages") true
-    get   "/Packages.gz" (const $ index "Packages.gz") true
+    get   "/Packages"    (const $ getIndex "Packages") true
+    get   "/Packages.gz" (const $ getIndex "Packages.gz") true
   where
     patch = addRoute "PATCH"
 
-reindex :: Arch ::: Name ::: Vers -> Handler
-reindex (arch ::: name ::: vers) = do
---    check if file exists in S3, return 404 if not found
-    return blank
+addEntry :: Arch ::: Name ::: Vers -> Handler
+addEntry (a ::: n ::: v) = do
+    i <- asks appIndex
+    e <- Index.insert a n v i
+    hoistEither $ fmap (const $ plain status200 "index-successful\n") e
 
-index :: Path -> Handler
-index file = do
+getIndex :: Path -> Handler
+getIndex file = do
+    -- Should consider the mtime of the file, and the mtime of the index
     path <- Path.encodeString . (</> file) . optWWW <$> asks appOptions
     sayT "index" "{}" [path]
     return $ responseFile status200 [] path Nothing
@@ -292,7 +297,7 @@ rebuild = return $ plain status500 "not-implemented\n"
   --               n  = maybe "N/A" (Text.decodeUtf8 . pkgPackage) (listToMaybe ys)
   --               vs = Text.decodeUtf8 . BS.intercalate ", " $ map pkgVersion ys
   --           say appLogger "index" "Indexing {} {}" [n, vs]
-  --           hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
+  --           Build.hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
@@ -302,19 +307,14 @@ blank = plain status200 ""
 
 onError :: Error -> App Response
 onError e = case statusCode code of
-    c | c >= 500  -> err errField
-      | c >= 400  -> debug errField
+    c | c >= 500  -> err $ msg line
+      | c >= 400  -> debug $ msg line
       | otherwise -> return ()
-    >> return (responseLBS code [] $ LBS.fromStrict lbl <> "\n")
+    >> return (responseLBS code [] $ line <> "\n")
   where
-    errField = field lbl ("\"" +++ line +++ "\"")
-
-    (code, lbl, line) = case e of
-        MissingField m   -> (status409, "invalid-package", encode m)
-        InvalidField m   -> (status413, "invalid-package", encode m)
-        ShellError _ _ m -> (status500, "invalid-package", m)
-        Error        s   -> (status500, "server-error",    LBS.pack s)
-        Exception    ex  -> (status500, "server-error",    LBS.pack $ show ex)
+    (code, line) = case e of
+        Error   c bs -> (c, Build.toLazyByteString $ bytes bs)
+        Exception ex -> (status500, LBS.pack $ show ex)
 
     encode = LBS.fromStrict . Text.encodeUtf8
 

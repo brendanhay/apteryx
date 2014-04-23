@@ -1,7 +1,9 @@
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 
 -- Module      : System.APT.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -41,6 +43,7 @@ import qualified Data.Text.Lazy.Builder           as LBuild
 import           Data.Typeable
 import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
+import           Network.HTTP.Types.Status
 import           System.Logger.Message            (ToBytes(..))
 
 debExt :: Text
@@ -50,23 +53,35 @@ toByteString :: ToBytes a => a -> ByteString
 toByteString = LBS.toStrict . Build.toLazyByteString . bytes
 
 fromByteString :: FromByteString a => ByteString -> Either Error a
-fromByteString = fmapL (InvalidField . Text.pack) . runParser parser
+fromByteString = fmapL (invalidField . BS.pack) . runParser parser
 
 type Path = Path.FilePath
 
-data Error
-    = ShellError   Int String LBS.ByteString
-    | MissingField Text
-    | InvalidField Text
-    | Error        String
-    | Exception    SomeException
-      deriving (Show, Typeable)
+data Error where
+    Exception :: SomeException -> Error
+    Error     :: ToBytes a => Status -> a -> Error
+
+deriving instance Typeable Error
+
+instance Show Error where
+    show (Exception ex) = show ex
+    show (Error    s m) = show s ++ " " ++ show (toByteString m)
 
 instance Exception Error
 
 instance ToError Error where
     toError (Exception ex) = toError ex
     toError e              = toError (show e)
+
+missingPackage, missingField, invalidField, awsError, shellError
+    :: ToBytes a
+    => a
+    -> Error
+missingPackage = Error status409
+missingField   = Error status409
+invalidField   = Error status413
+awsError       = Error status500
+shellError     = Error status500
 
 data Bucket = Bucket
     { bktBucket :: !Text
@@ -150,7 +165,7 @@ instance ToBytes Size where
     bytes = Build.int64Dec . unSize
 
 data Package = Package
-    { pkgPackage  :: !Name
+    { pkgName     :: !Name
     , pkgVersion  :: !Vers
     , pkgArch     :: !Arch
     , pkgSize     :: !Size

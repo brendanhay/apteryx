@@ -78,7 +78,7 @@ runShellT :: MonadIO m => String -> EitherT Error m ByteString
 runShellT cmd = do
     (c, obs, ebs) <- catchErrorT $ createProcess opts >>= run
     case c of
-        ExitFailure n -> left  $ ShellError n cmd ebs
+        ExitFailure _ -> left  $ shellError (LBS.toStrict ebs)
         ExitSuccess   -> right $ LBS.toStrict obs
   where
     run (Just inh, Just outh, Just errh, hd) = do
@@ -107,7 +107,7 @@ runShellT cmd = do
 loadEnv :: (MonadThrow m, MonadIO m) => Bool -> m AWSEnv
 loadEnv dbg = liftIO $
     runEitherT (loadAWSEnv AuthDiscover dbg)
-        >>= either (throwM . Error) return
+        >>= either (throwM . awsError) return
 
 catchErrorT :: MonadIO m => IO a -> EitherT Error m a
 catchErrorT = EitherT
