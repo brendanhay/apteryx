@@ -21,7 +21,7 @@ import           Control.DeepSeq
 import           Control.Error
 import           Control.Exception
 import           Control.Monad
-import           Control.Monad.Catch        hiding (try)
+import           Control.Monad.Catch        hiding (try, finally)
 import           Control.Monad.IO.Class
 import           Crypto.Hash
 import qualified Crypto.Hash.Conduit        as Crypto
@@ -58,11 +58,11 @@ hashFileT = catchErrorT . Crypto.hashFile . Path.encodeString
 
 withTempFile :: Path
              -> String
-             -> (Path -> Handle -> IO a)
+             -> (FilePath -> Handle -> IO a)
              -> IO a
-withTempFile dir tmpl f = runEitherT run >>= either throwM return
-  where
-    run = withTempFileT dir tmpl (\path hd -> catchErrorT $ f path hd)
+withTempFile dir tmpl f = do
+    (path, hd) <- openTempFile (Path.encodeString dir) tmpl
+    f path hd `finally` removeFile path
 
 withTempFileT :: MonadIO m
               => Path
@@ -71,8 +71,8 @@ withTempFileT :: MonadIO m
               -> EitherT Error m a
 withTempFileT dir tmpl f = do
     (path, hd) <- catchErrorT $ openTempFile (Path.encodeString dir) tmpl
-    f (Path.decodeString path) hd `catchT`
-        \e -> catchErrorT (removeFile path) >> left e
+    mapEitherT (\x -> liftIO (removeFile path) >> x)
+               (f (Path.decodeString path) hd)
 
 runShellT :: MonadIO m => String -> EitherT Error m ByteString
 runShellT cmd = do

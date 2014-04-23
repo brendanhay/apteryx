@@ -140,15 +140,8 @@ entries s = aws s $ paginate start
         | bcStorageClass == Glacier = False
         | otherwise                 = debExt `Text.isSuffixOf` bcKey
 
-    catalogue m =
-        maybe (return . sortBy buckets $ Map.elems m)
-              (catalogue . entry m)
-              =<< await
-
-    -- FIXME: Is this extra sort pass necessary?
-    buckets (x:_) (y:_) = entName x `compare` entName y
-    buckets []    _     = LT
-    buckets _     []    = GT
+    catalogue m = maybe (return $ Map.elems m) (catalogue . entry m)
+        =<< await
 
     entry m Contents{..} =
         case BS.fromByteString (Text.encodeUtf8 bcKey) of

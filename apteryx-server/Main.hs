@@ -259,24 +259,23 @@ triggerRebuild = do
 
     maybe (return $ plain status200 "rebuild-in-progress\n")
           (\x -> do
-              catchErrorT . void $ forkFinally (rebuild optTemp optN appStore dest)
-                  (const $ void $ tryPutMVar appRebuild x)
+              catchErrorT . void $ rebuild optTemp optN appStore dest
+                  `forkFinally` const (void $ tryPutMVar appRebuild x)
               return $ plain status202 "/Packages\n")
           m
   where
-    rebuild d n s dest = withTempFile d ".pkg.idx" $ \path hd -> do
+    rebuild d n s dest = withTempFile d ".pkg.idx" $ \src hd -> do
         hSetBinaryMode hd True
         hSetBuffering hd (BlockBuffering Nothing)
 
-        let src = Path.encodeString path
-            f   = mapM (\x -> Store.metadata (entKey x) s)
-            g   = hPutBuilder hd . foldMap ((<> "\n") . Pkg.toBuilder)
+        let f = mapM (\x -> Store.metadata (entKey x) s)
+            g = hPutBuilder hd . foldMap ((<> "\n") . Pkg.toBuilder)
 
         xs <- Store.entries s
+
         parForM n xs f (g . reverse . catMaybes)
 
-        hClose hd
-        copyFile src dest
+        hClose hd >> copyFile src dest
 
 getIndex :: Path -> Handler
 getIndex file = do
