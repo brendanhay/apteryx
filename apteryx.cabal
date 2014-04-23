@@ -67,6 +67,7 @@ library
         , system-filepath
         , text
         , text-format
+        , time
         , tinylog              >= 0.7.2
         , transformers
         , unix
@@ -139,6 +140,7 @@ executable apteryx-server
         , text
         , tinylog
         , transformers
+        , unix
         , wai
         , wai-extra
         , wai-predicates       >= 0.4

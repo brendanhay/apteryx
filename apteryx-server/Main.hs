@@ -30,7 +30,7 @@ import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
 import           Control.Monad.Trans.Resource
 import           Data.ByteString             (ByteString)
-import qualified Data.ByteString.Builder     as Build
+import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Conduit
@@ -58,8 +58,6 @@ import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (concatMap, head)
 import           System.APT.IO
-import           System.APT.Index            (Index)
-import qualified System.APT.Index            as Index
 import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package          as Pkg
@@ -70,6 +68,7 @@ import           System.Directory
 import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT              hiding (Error)
+import           System.Posix.Files
 
 default (ByteString)
 
@@ -149,15 +148,15 @@ options = Options
 data Env = Env
     { appOptions :: !Options
     , appStore   :: Store
-    , appIndex   :: Index
     , appLogger  :: Logger
-    , appLock    :: MVar ()
+    , appRebuild :: MVar ()
     }
 
 newEnv :: Options -> IO Env
-newEnv o@Options{..} = do
-    s <- Store.new optKey optVersions <$> loadEnv optDebug
-    Env o s <$> Index.new s <*> newLogger <*> newMVar ()
+newEnv o@Options{..} = Env o
+    <$> (Store.new optKey optVersions <$> loadEnv optDebug)
+    <*> newLogger
+    <*> newMVar ()
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -184,6 +183,16 @@ instance MonadLogger (EitherT e App) where
 
 instance MonadThrow (EitherT e App) where
     throwM = lift . throwM
+
+instance MonadCatch (EitherT e App) where
+    catch m f = EitherT $
+        runEitherT m `catch` \e -> runEitherT (f e)
+
+    mask a = EitherT $
+        mask $ \u -> runEitherT (a $ mapEitherT u)
+
+    uninterruptibleMask a = EitherT $
+        uninterruptibleMask $ \u -> runEitherT (a $ mapEitherT u)
 
 type Handler = EitherT Error App Response
 
@@ -215,7 +224,7 @@ serve o@Options{..} = do
         Log.info l $ msg "Apteryx server starting..."
         Log.info l $ msg ("Listening on " +++ optHost +++ ':' +++ optPort)
 
-    logException l _ x = Log.err l $ msg (BS.pack $ show x)
+    logException l _ = Log.err l . msg . show
 
     serverError = plain status500 "server-error\n"
 
@@ -229,7 +238,7 @@ routes = do
         .&. capture "name"
         .&. capture "vers"
 
-    post  "/packages" (const rebuild) true
+    post  "/packages" (const triggerRebuild) true
 
     get   "/Packages"    (const $ getIndex "Packages") true
     get   "/Packages.gz" (const $ getIndex "Packages.gz") true
@@ -237,67 +246,43 @@ routes = do
     patch = addRoute "PATCH"
 
 addEntry :: Arch ::: Name ::: Vers -> Handler
-addEntry (a ::: n ::: v) = do
-    i <- asks appIndex
-    e <- Index.insert a n v i
-    hoistEither $ fmap (const $ plain status200 "index-successful\n") e
+addEntry (_ ::: _ ::: _) = triggerRebuild
+
+triggerRebuild :: Handler
+triggerRebuild = do
+    Env{..} <- ask
+
+    let Options{..} = appOptions
+        dest        = Path.encodeString (optWWW </> "Packages")
+
+    m <- catchErrorT $ tryTakeMVar appRebuild
+
+    maybe (return $ plain status200 "rebuild-in-progress\n")
+          (\x -> do
+              catchErrorT . void $ forkFinally (rebuild optTemp optN appStore dest)
+                  (const $ void $ tryPutMVar appRebuild x)
+              return $ plain status202 "/Packages\n")
+          m
+  where
+    rebuild d n s dest = withTempFile d ".pkg.idx" $ \path hd -> do
+        hSetBinaryMode hd True
+        hSetBuffering hd (BlockBuffering Nothing)
+
+        let src = Path.encodeString path
+            f   = mapM (\x -> Store.metadata (entKey x) s)
+            g   = hPutBuilder hd . foldMap ((<> "\n") . Pkg.toBuilder)
+
+        xs <- Store.entries s
+        parForM n xs f (g . reverse . catMaybes)
+
+        hClose hd
+        copyFile src dest
 
 getIndex :: Path -> Handler
 getIndex file = do
-    -- Should consider the mtime of the file, and the mtime of the index
-    path <- Path.encodeString . (</> file) . optWWW <$> asks appOptions
-    sayT "index" "{}" [path]
+    o <- asks appOptions
+    let path = Path.encodeString (optWWW o `Path.append` file)
     return $ responseFile status200 [] path Nothing
-
-rebuild :: Handler
-rebuild = return $ plain status500 "not-implemented\n"
-
-  --   e <- ask
-  --   p <- liftIO . isEmptyMVar $ appLock e
-  --   when p $ go e
-  --   return $ rs p
-  -- where
-  --   rs True  = plain status200 "rebuild-in-progress\n"
-  --   rs False = plain status202 "starting-rebuild\n"
-
-  --   go Env{..} = fork . lock . temp $ \path hd -> do
-  --       let src = Path.encodeString path
-
-  --       say appLogger "rebuild" "Starting rebuild of {}..." [src]
-
-  --       hSetBinaryMode hd True
-  --       hSetBuffering hd (BlockBuffering Nothing)
-
-  --       either throwM return =<< AWS.runAWSEnv appEnv (do
-  --           xs <- S3.entries appLogger "rebuild" optKey optVersions
-  --           liftIO $ parForM optN xs metadata (either throwM (append hd)))
-
-  --       hClose hd <* say appLogger "rebuild" "Closed {}" [src]
-  --       copyFile src pkg <* say appLogger "rebuild" "Copied {}" [pkg]
-
-  --       runResourceT $ Conduit.sourceFile src
-  --           =$ Conduit.gzip
-  --           $$ Conduit.sinkFile gzip
-  --       say appLogger "rebuild" "Compressed {}" [gzip]
-  --     where
-  --       Options{..} = appOptions
-
-  --       fork = void . liftIO . forkIO
-  --       lock = withMVar appLock . const
-  --       temp = withTempFile optTemp ".pkg"
-
-  --       pkg  = Path.encodeString (optWWW </> "Packages")
-  --       gzip = Path.encodeString (optWWW </> "Packages.gz")
-
-  --       metadata = AWS.runAWSEnv appEnv
-  --           . mapM (S3.metadata appLogger "meta" . entKey)
-
-  --       append hd xs = do
-  --           let ys = reverse xs
-  --               n  = maybe "N/A" (Text.decodeUtf8 . pkgPackage) (listToMaybe ys)
-  --               vs = Text.decodeUtf8 . BS.intercalate ", " $ map pkgVersion ys
-  --           say appLogger "index" "Indexing {} {}" [n, vs]
-  --           Build.hPutBuilder hd $ foldMap (\x -> Pkg.toBuilder x <> "\n") ys
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
@@ -313,7 +298,7 @@ onError e = case statusCode code of
     >> return (responseLBS code [] $ line <> "\n")
   where
     (code, line) = case e of
-        Error   c bs -> (c, Build.toLazyByteString $ bytes bs)
+        Error   c bs -> (c, toLazyByteString $ bytes bs)
         Exception ex -> (status500, LBS.pack $ show ex)
 
     encode = LBS.fromStrict . Text.encodeUtf8

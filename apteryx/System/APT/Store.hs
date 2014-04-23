@@ -48,7 +48,6 @@ import           Network.HTTP.Conduit
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
-
 -- | Structure:
 --
 -- +-arbitrary prefix
@@ -141,7 +140,15 @@ entries s = aws s $ paginate start
         | bcStorageClass == Glacier = False
         | otherwise                 = debExt `Text.isSuffixOf` bcKey
 
-    catalogue m = await >>= maybe (return $ Map.elems m) (catalogue . entry m)
+    catalogue m =
+        maybe (return . sortBy buckets $ Map.elems m)
+              (catalogue . entry m)
+              =<< await
+
+    -- FIXME: Is this extra sort pass necessary?
+    buckets (x:_) (y:_) = entName x `compare` entName y
+    buckets []    _     = LT
+    buckets _     []    = GT
 
     entry m Contents{..} =
         case BS.fromByteString (Text.encodeUtf8 bcKey) of
@@ -155,23 +162,16 @@ entries s = aws s $ paginate start
         . mappend xs
 
 -- | Lookup the metadata for a specific entry.
-metadata :: MonadIO m
-         => Arch
-         -> Name
-         -> Vers
-         -> Store
-         -> m (Maybe Package)
-metadata a n v s = aws s $ do
+metadata :: MonadIO m => Object -> Store -> m (Maybe Package)
+metadata o s = aws s $ do
     rs <- hush <$> sendCatch HeadObject
-        { hoBucket  = bkt
-        , hoKey     = key
+        { hoBucket  = bktBucket (_bucket s)
+        , hoKey     = objKey o
         , hoHeaders = []
         }
     maybe (return Nothing)
           (return . hush . Pkg.fromHeaders . responseHeaders)
           rs
-  where
-    (bkt, key) = location (_bucket s) a n v []
 
 -- | Determine the location of a file in S3.
 location :: Bucket -> Arch -> Name -> Vers -> [Text] -> (Text, Text)
