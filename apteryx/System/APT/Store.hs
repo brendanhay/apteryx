@@ -16,6 +16,7 @@
 module System.APT.Store
     ( Store
     , new
+
     , add
     , get
     , copy
