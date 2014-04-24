@@ -67,53 +67,13 @@ library
         , system-filepath
         , text
         , text-format
-        , time
         , tinylog              >= 0.7.2
         , transformers
         , unix
 
--- executable apteryx-build
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-build
---     default-language:   Haskell2010
---     ghc-options:
---         -threaded
---         -Wall
---         -with-rtsopts=-N
---         -with-rtsopts=-T
---         -funbox-strict-fields
-
---     build-depends:
---           amazonka
---         , apteryx
---         , base
---         , bytestring
---         , conduit
---         , optparse-applicative
-
--- executable apteryx-upload
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-upload
---     default-language:   Haskell2010
---     ghc-options:
---         -threaded
---         -Wall
---         -with-rtsopts=-T
---         -funbox-strict-fields
-
---     build-depends:
---           apteryx
---         , base
---         , bytestring
---         , conduit-extra
---         , either
---         , exceptions
---         , optparse-applicative
---         , system-filepath
-
-executable apteryx-server
+executable apteryx-build
     main-is:            Main.hs
-    hs-source-dirs:     apteryx-server
+    hs-source-dirs:     apteryx-build
     default-language:   Haskell2010
     ghc-options:
         -threaded
@@ -128,16 +88,49 @@ executable apteryx-server
         , base
         , bytestring
         , conduit
+        , optparse-applicative
+
+executable apteryx-upload
+    main-is:            Main.hs
+    hs-source-dirs:     apteryx-upload
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-T
+        -funbox-strict-fields
+
+    build-depends:
+          apteryx
+        , base
+        , bytestring
         , conduit-extra
-        , directory
+        , either
+        , exceptions
+        , optparse-applicative
+        , system-filepath
+
+executable apteryx-server
+    main-is:            Main.hs
+    hs-source-dirs:     apteryx-server
+    default-language:   Haskell2010
+    ghc-options:
+        -threaded
+        -Wall
+        -with-rtsopts=-N
+        -with-rtsopts=-T
+        -funbox-strict-fields
+
+    build-depends:
+          apteryx
+        , base
+        , bytestring
         , either
         , exceptions
         , http-types
         , mtl
         , optparse-applicative
-        , resourcet
         , system-filepath
-        , text
         , tinylog
         , transformers
         , wai

@@ -21,38 +21,23 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Control.Concurrent
-import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
-import           Control.Monad.Trans.Resource
 import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder
-import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
-import           Data.Conduit
-import qualified Data.Conduit.Binary         as Conduit
-import qualified Data.Conduit.Zlib           as Conduit
-import           Data.Foldable               (foldMap)
-import           Data.List                   (intersperse)
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
-import           Data.Text                   (Text)
-import qualified Data.Text.Encoding          as Text
 import           Data.Word
-import           Filesystem.Path.CurrentOS   ((</>))
 import qualified Filesystem.Path.CurrentOS   as Path
-import           Network.AWS                 (Credentials(..), AWSEnv)
-import qualified Network.AWS                 as AWS
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.Gzip as GZip
-import qualified Network.Wai.Middleware.RequestLogger (logStdout)
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
@@ -62,12 +47,8 @@ import           System.APT.Index            (Index)
 import qualified System.APT.Index            as Index
 import           System.APT.Log
 import           System.APT.Options
-import qualified System.APT.Package          as Pkg
-import           System.APT.Store            (Store)
 import qualified System.APT.Store            as Store
 import           System.APT.Types
-import           System.Directory
-import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT              hiding (Error)
 

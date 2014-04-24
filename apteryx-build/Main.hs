@@ -95,6 +95,8 @@ options = Options
         <> help "Print debug output."
          )
 
+-- FIXME: apt-cacher-ng behaviour
+
 -- FIXME:
 --   Add verification to the build process
 --   Ensure number of versions is correct, metadata can be loaded
@@ -160,9 +162,7 @@ main = do
 
     say n "Copying to {}..." [optTo]
 
-    parForM optN (concat xs)
-        (worker s optTemp optTo)
-        (const $ return ())
+    parForM optN (worker s optTemp optTo) (const $ return ()) (concat xs)
 
     maybe (return ())
           (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)

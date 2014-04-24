@@ -32,20 +32,11 @@ import           Control.Concurrent.ThreadPool
 import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
-import           Data.ByteString           (ByteString)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8     as BS
-import           Data.Conduit
-import           Data.Conduit
-import qualified Data.Conduit.List         as Conduit
 import qualified Data.Foldable             as Fold
-import           Data.IORef
-import           Data.Map.Strict           (Map)
-import qualified Data.Map.Strict           as Map
 import           Data.Maybe
 import           Data.Monoid
-import           Data.Time
-import           Data.Time.Clock.POSIX
 import           Filesystem.Path.CurrentOS ((</>))
 import qualified Filesystem.Path.CurrentOS as Path
 import           Network.HTTP.Conduit      hiding (path)
@@ -57,7 +48,6 @@ import qualified System.APT.Store          as Store
 import           System.APT.Types
 import           System.Directory
 import           System.IO
-import           System.Logger.Message     ((+++))
 
 data Index = Index
     { _n     :: !Int
@@ -93,13 +83,13 @@ trySync i@Index{..} = liftIO $ do
 -- | Regenerate the package index if it doesn't exist on disk.
 syncIfMissing :: MonadIO m => Index -> m ()
 syncIfMissing i@Index{..} = liftIO $ do
-    let path = Path.encodeString _path
-    x <- doesFileExist path
+    let f = Path.encodeString _path
+    x <- doesFileExist f
     unless x $
         bracket (takeMVar _lock)
                 (putMVar _lock)
                 (const $ do
-                    y <- doesFileExist path
+                    y <- doesFileExist f
                     unless y $ unsafeSync i)
 
 -- | Regenerate the package index and write it to disk.
