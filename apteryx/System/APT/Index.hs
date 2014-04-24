@@ -12,32 +12,122 @@
 -- Portability : non-portable (GHC extensions)
 
 -- | Interface to the in-memory index of package metadata.
-module System.APT.Index where
+module System.APT.Index
+    ( Index
+    , new
+
+    , path
+    , member
+    , trySync
+    , syncIfMissing
+    , sync
+
+    , rebuild
+    , reindex
+    ) where
 
 import           Control.Applicative
 import           Control.Concurrent
+import           Control.Concurrent.ThreadPool
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Data.ByteString           (ByteString)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8     as BS
 import           Data.Conduit
 import           Data.Conduit
-import qualified Data.Conduit.List as Conduit
+import qualified Data.Conduit.List         as Conduit
+import qualified Data.Foldable             as Fold
 import           Data.IORef
 import           Data.Map.Strict           (Map)
 import qualified Data.Map.Strict           as Map
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Time
 import           Data.Time.Clock.POSIX
+import           Filesystem.Path.CurrentOS ((</>))
 import qualified Filesystem.Path.CurrentOS as Path
-import           Network.HTTP.Conduit
+import           Network.HTTP.Conduit      hiding (path)
 import qualified Network.HTTP.Types        as HTTP
+import           System.APT.IO
 import qualified System.APT.Package        as Pkg
 import           System.APT.Store          (Store)
 import qualified System.APT.Store          as Store
 import           System.APT.Types
+import           System.Directory
+import           System.IO
 import           System.Logger.Message     ((+++))
+
+data Index = Index
+    { _n     :: !Int
+    , _path  :: !Path
+    , _temp  :: !Path
+    , _store :: Store
+    , _lock  :: MVar ()
+    }
+
+new :: MonadIO m => Int -> Path -> Path -> Store -> m Index
+new n dir tmp s = liftIO $
+    ensureExists dir >>
+        Index n (dir </> "Packages") tmp s <$> newMVar ()
+
+path :: Index -> Path
+path = _path
+
+-- | Check if a specific arch/name/vers exists in the package index.
+member :: MonadIO m => Arch -> Name -> Vers -> Index -> m Bool
+member a n v i = undefined
+
+-- | Regenerate the package index and write it to disk,
+--   ensuring only one active sync is in progress.
+trySync :: MonadIO m => Index -> m Bool
+trySync i@Index{..} = liftIO $ do
+    m <- tryTakeMVar _lock
+    maybe (return False)
+          (\v -> do
+              void $ unsafeSync i `forkFinally` const (putMVar _lock v)
+              return True)
+          m
+
+-- | Regenerate the package index if it doesn't exist on disk.
+syncIfMissing :: MonadIO m => Index -> m ()
+syncIfMissing i@Index{..} = liftIO $ do
+    let path = Path.encodeString _path
+    x <- doesFileExist path
+    unless x $
+        bracket (takeMVar _lock)
+                (putMVar _lock)
+                (const $ do
+                    y <- doesFileExist path
+                    unless y $ unsafeSync i)
+
+-- | Regenerate the package index and write it to disk.
+sync :: MonadIO m => Index -> m ()
+sync i@Index{..} = liftIO $
+    bracket (takeMVar _lock)
+            (putMVar _lock)
+            (const $ unsafeSync i)
+
+-- | Synchronously regenerate the index, without locking.
+unsafeSync :: Index -> IO ()
+unsafeSync Index{..} =
+    withTempFile _temp ".packages" $ \src hd -> do
+        hSetBinaryMode hd True
+        hSetBuffering hd (BlockBuffering Nothing)
+
+        let get = mapM (\x -> Store.metadata (entKey x) _store)
+            put = hPutBuilder hd
+                . Fold.foldMap Pkg.toBuilder
+                . reverse
+                . catMaybes
+
+        Store.entries _store >>=
+            parForM _n get put
+
+        hClose hd >> copyFile src (Path.encodeString _path)
+
+-- FIXME: Move to a more relevant location
 
 -- | Trigger a remote rebuild of the index.
 rebuild :: MonadIO m => String -> m ()

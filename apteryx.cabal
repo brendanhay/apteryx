@@ -72,44 +72,44 @@ library
         , transformers
         , unix
 
-executable apteryx-build
-    main-is:            Main.hs
-    hs-source-dirs:     apteryx-build
-    default-language:   Haskell2010
-    ghc-options:
-        -threaded
-        -Wall
-        -with-rtsopts=-N
-        -with-rtsopts=-T
-        -funbox-strict-fields
+-- executable apteryx-build
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-build
+--     default-language:   Haskell2010
+--     ghc-options:
+--         -threaded
+--         -Wall
+--         -with-rtsopts=-N
+--         -with-rtsopts=-T
+--         -funbox-strict-fields
 
-    build-depends:
-          amazonka
-        , apteryx
-        , base
-        , bytestring
-        , conduit
-        , optparse-applicative
+--     build-depends:
+--           amazonka
+--         , apteryx
+--         , base
+--         , bytestring
+--         , conduit
+--         , optparse-applicative
 
-executable apteryx-upload
-    main-is:            Main.hs
-    hs-source-dirs:     apteryx-upload
-    default-language:   Haskell2010
-    ghc-options:
-        -threaded
-        -Wall
-        -with-rtsopts=-T
-        -funbox-strict-fields
+-- executable apteryx-upload
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-upload
+--     default-language:   Haskell2010
+--     ghc-options:
+--         -threaded
+--         -Wall
+--         -with-rtsopts=-T
+--         -funbox-strict-fields
 
-    build-depends:
-          apteryx
-        , base
-        , bytestring
-        , conduit-extra
-        , either
-        , exceptions
-        , optparse-applicative
-        , system-filepath
+--     build-depends:
+--           apteryx
+--         , base
+--         , bytestring
+--         , conduit-extra
+--         , either
+--         , exceptions
+--         , optparse-applicative
+--         , system-filepath
 
 executable apteryx-server
     main-is:            Main.hs
@@ -140,7 +140,6 @@ executable apteryx-server
         , text
         , tinylog
         , transformers
-        , unix
         , wai
         , wai-extra
         , wai-predicates       >= 0.4

@@ -58,6 +58,8 @@ import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (concatMap, head)
 import           System.APT.IO
+import           System.APT.Index            (Index)
+import qualified System.APT.Index            as Index
 import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package          as Pkg
@@ -68,7 +70,6 @@ import           System.Directory
 import           System.IO
 import qualified System.Logger               as Log
 import           System.LoggerT              hiding (Error)
-import           System.Posix.Files
 
 default (ByteString)
 
@@ -146,17 +147,14 @@ options = Options
          )
 
 data Env = Env
-    { appOptions :: !Options
-    , appStore   :: Store
-    , appLogger  :: Logger
-    , appRebuild :: MVar ()
+    { appIndex  :: Index
+    , appLogger :: Logger
     }
 
 newEnv :: Options -> IO Env
-newEnv o@Options{..} = Env o
-    <$> (Store.new optKey optVersions <$> loadEnv optDebug)
-    <*> newLogger
-    <*> newMVar ()
+newEnv Options{..} = do
+    s <- Store.new optKey optVersions <$> loadEnv optDebug
+    Env <$> Index.new optN optWWW optTemp s <*> newLogger
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -204,8 +202,11 @@ main = parseOptions options >>= serve
 
 serve :: Options -> IO ()
 serve o@Options{..} = do
-    ensureExists optWWW
-    e <- newEnv o
+    e@Env{..} <- newEnv o
+    Log.info appLogger $ msg "Apteryx server starting..."
+    Log.info appLogger $ msg "Syncing package database..."
+    Index.sync appIndex
+    Log.info appLogger $ msg "Sync complete."
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
     middleware e = logRequest (appLogger e) . GZip.gzip GZip.def $ handler e
@@ -220,8 +221,7 @@ serve o@Options{..} = do
         . setTimeout 60
         $ defaultSettings
 
-    logStart l = do
-        Log.info l $ msg "Apteryx server starting..."
+    logStart l =
         Log.info l $ msg ("Listening on " +++ optHost +++ ':' +++ optPort)
 
     logException l _ = Log.err l . msg . show
@@ -239,48 +239,33 @@ routes = do
         .&. capture "vers"
 
     post  "/packages" (const triggerRebuild) true
-
-    get   "/Packages"    (const $ getIndex "Packages") true
-    get   "/Packages.gz" (const $ getIndex "Packages.gz") true
+    get   "/Packages" (const getIndex) true
   where
     patch = addRoute "PATCH"
 
 addEntry :: Arch ::: Name ::: Vers -> Handler
-addEntry (_ ::: _ ::: _) = triggerRebuild
+addEntry (a ::: n ::: v) = do
+    i <- asks appIndex
+    p <- catchErrorT $ Index.sync i >> Index.member a n v i
+    return $
+        if p
+            then plain status200 "success\n"
+            else plain status404 "not-found\n"
 
 triggerRebuild :: Handler
 triggerRebuild = do
-    Env{..} <- ask
+    i <- asks appIndex
+    p <- catchErrorT $ Index.trySync i
+    return $
+        if p
+           then plain status202 "rebuilding-index\n"
+           else plain status200 "in-progress\n"
 
-    let Options{..} = appOptions
-        dest        = Path.encodeString (optWWW </> "Packages")
-
-    m <- catchErrorT $ tryTakeMVar appRebuild
-
-    maybe (return $ plain status200 "rebuild-in-progress\n")
-          (\x -> do
-              catchErrorT . void $ rebuild optTemp optN appStore dest
-                  `forkFinally` const (void $ tryPutMVar appRebuild x)
-              return $ plain status202 "/Packages\n")
-          m
-  where
-    rebuild d n s dest = withTempFile d ".pkg.idx" $ \src hd -> do
-        hSetBinaryMode hd True
-        hSetBuffering hd (BlockBuffering Nothing)
-
-        let f = mapM (\x -> Store.metadata (entKey x) s)
-            g = hPutBuilder hd . foldMap ((<> "\n") . Pkg.toBuilder)
-
-        xs <- Store.entries s
-
-        parForM n xs f (g . reverse . catMaybes)
-
-        hClose hd >> copyFile src dest
-
-getIndex :: Path -> Handler
-getIndex file = do
-    o <- asks appOptions
-    let path = Path.encodeString (optWWW o `Path.append` file)
+getIndex :: Handler
+getIndex = do
+    i <- asks appIndex
+    catchErrorT $ Index.syncIfMissing i
+    let path = Path.encodeString (Index.path i)
     return $ responseFile status200 [] path Nothing
 
 plain :: Status -> LBS.ByteString -> Response
@@ -299,8 +284,6 @@ onError e = case statusCode code of
     (code, line) = case e of
         Error   c bs -> (c, toLazyByteString $ bytes bs)
         Exception ex -> (status500, LBS.pack $ show ex)
-
-    encode = LBS.fromStrict . Text.encodeUtf8
 
 logRequest :: Logger -> Middleware
 logRequest l app rq = do

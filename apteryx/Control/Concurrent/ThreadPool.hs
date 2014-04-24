@@ -15,11 +15,11 @@ import Control.Concurrent.STM
 import Control.Exception
 
 parForM :: Int          -- ^ Number of workers.
-        -> [a]          -- ^ Work items.
         -> (a -> IO b)  -- ^ Work action.
         -> (b -> IO ()) -- ^ Result action.
+        -> [a]          -- ^ Work items.
         -> IO ()        -- ^ Barrier action.
-parForM n xs f g = do
+parForM n f g xs = do
     (out, b) <- parMapM n xs f
     a        <- async (go out)
     link a
