@@ -1,3 +1,4 @@
+
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
@@ -150,36 +151,33 @@ main = do
     Options{..} <- parseOptions options
 
     n  <- getProgName
+    s  <- Store.new optFrom optVersions <$> loadEnv optDebug
 
     say n "Looking for entries in {}..." [optFrom]
+    xs <- concat <$> Store.entries s
 
-    s  <- Store.new optFrom optVersions <$> loadEnv optDebug
-    xs <- Store.entries s
+    say n "Discovered {} packages." [length xs]
+    mapM_ (say n "Found {}" . (:[]) . entAnn) xs
 
-    say n "Discovered {} package groups." [length xs]
+--    say n "Copying to {}..." [optTo]
+  --   parForM optN (worker s optTemp optTo) (const $ return ()) xs
 
-    mapM_ (\e -> say n "Found {}" [objKey $ entKey e]) (concat xs)
+  --   maybe (return ())
+  --         (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
+  --         optAddress
 
-    say n "Copying to {}..." [optTo]
+  --   say_ n "Done."
+  -- where
+  --   worker s tmp dest o@Entry{..} = do
+  --       n <- (mappend "worker-") . drop 9 . show <$> myThreadId
 
-    parForM optN (worker s optTemp optTo) (const $ return ()) (concat xs)
+  --       say n "Retrieving {}" [entAnn]
+  --       m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
 
-    maybe (return ())
-          (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
-          optAddress
+  --       maybe (say n "Unable to retrieve package from {}" [entAnn])
+  --             (\x -> do
+  --                 say n "Read package description from {}" [entAnn]
+  --                 Store.copy o x dest s
+  --                 say n "Copied {} to {}" [build entAnn, build dest])
+  --             m
 
-    say_ n "Done."
-  where
-    worker s tmp dest Entry{..} = do
-        n <- (mappend "worker-") . drop 9 . show <$> myThreadId
-
-        say n "Retrieving {}" [entKey]
-        m <- Store.get entKey (liftEitherT . Pkg.fromFile tmp) s
-
-        maybe (say n "Unable to retrieve package from {}" [entKey])
-              (\x -> do
-                  say n "Read package description from {}" [entKey]
-                  Store.copy entKey x dest s
-
-                  say n "Copyied {} to {}" [build entKey, build dest])
-              m

@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE ViewPatterns      #-}
 
 -- Module      : System.APT.Index
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -17,7 +18,7 @@ module System.APT.Index
     , new
 
     , path
-    , member
+    , lookup
     , trySync
     , syncIfMissing
     , sync
@@ -40,7 +41,7 @@ import           Data.Monoid
 import           Filesystem.Path.CurrentOS ((</>))
 import qualified Filesystem.Path.CurrentOS as Path
 import           Network.HTTP.Conduit      hiding (path)
-import qualified Network.HTTP.Types        as HTTP
+import           Prelude                   hiding (lookup)
 import           System.APT.IO
 import qualified System.APT.Package        as Pkg
 import           System.APT.Store          (Store)
@@ -65,9 +66,9 @@ new n dir tmp s = liftIO $
 path :: Index -> Path
 path = _path
 
--- | Check if a specific arch/name/vers exists in the package index.
-member :: MonadIO m => Arch -> Name -> Vers -> Index -> m Bool
-member a n v i = undefined
+-- | Lookup a specific arch/name/vers exists in the package index.
+lookup :: MonadIO m => Arch -> Name -> Vers -> Index -> m (Maybe Package)
+lookup a n v = Store.metadata (Entry n v a ()) . _store
 
 -- | Regenerate the package index and write it to disk,
 --   ensuring only one active sync is in progress.
@@ -76,7 +77,7 @@ trySync i@Index{..} = liftIO $ do
     m <- tryTakeMVar _lock
     maybe (return False)
           (\v -> do
-              void $ unsafeSync i `forkFinally` const (putMVar _lock v)
+              void $ unsafeWrite i `forkFinally` const (putMVar _lock v)
               return True)
           m
 
@@ -90,32 +91,32 @@ syncIfMissing i@Index{..} = liftIO $ do
                 (putMVar _lock)
                 (const $ do
                     y <- doesFileExist f
-                    unless y $ unsafeSync i)
+                    unless y $ unsafeWrite i)
 
 -- | Regenerate the package index and write it to disk.
 sync :: MonadIO m => Index -> m ()
 sync i@Index{..} = liftIO $
     bracket (takeMVar _lock)
             (putMVar _lock)
-            (const $ unsafeSync i)
+            (const $ unsafeWrite i)
 
--- | Synchronously regenerate the index, without locking.
-unsafeSync :: Index -> IO ()
-unsafeSync Index{..} =
-    withTempFile _temp ".packages" $ \src hd -> do
-        hSetBinaryMode hd True
-        hSetBuffering hd (BlockBuffering Nothing)
+-- | Write the index file, without locking.
+unsafeWrite :: Index -> IO ()
+unsafeWrite Index{..} = return ()
+    -- withTempFile _temp ".packages" $ \src hd -> do
+    --     hSetBinaryMode hd True
+    --     hSetBuffering hd (BlockBuffering Nothing)
 
-        let get = mapM (\x -> Store.metadata (entKey x) _store)
-            put = hPutBuilder hd
-                . Fold.foldMap Pkg.toBuilder
-                . reverse
-                . catMaybes
+    --     let get = mapM (`Store.metadata` _store)
+    --         put = hPutBuilder hd
+    --             . Fold.foldMap ((<> "\n") . Pkg.toBuilder)
+    --             . reverse
+    --             . catMaybes
 
-        Store.entries _store >>=
-            parForM _n get put
+    --     -- Store.entries _store >>=
+    --     --     parForM _n get put
 
-        hClose hd >> copyFile src (Path.encodeString _path)
+    --     hClose hd >> copyFile (Path.encodeString src) (Path.encodeString _path)
 
 -- FIXME: Move to a more relevant location
 
@@ -130,18 +131,17 @@ rebuild host = liftIO $ do
 
 -- | Trigger a remote reindex of a specified package.
 reindex :: MonadIO m => Package -> String -> m ()
-reindex Package{..} host = liftIO $ do
+reindex Entry{..} host = liftIO $ do
     rq <- parseUrl addr
-    _  <- withManager $ httpLbs (rq { method = "PATCH" })
-    return ()
+    void . withManager $ httpLbs (rq { method = "PATCH" })
   where
     addr = host <> url
 
     url = BS.unpack $ mconcat
         [ "/packages/"
-        , toByteString pkgArch
+        , toByteString entArch
         , "/"
-        , toByteString pkgName
+        , toByteString entName
         , "/"
-        , HTTP.urlEncode True (toByteString pkgVersion)
+        , toByteString (urlEncode entVers)
         ]

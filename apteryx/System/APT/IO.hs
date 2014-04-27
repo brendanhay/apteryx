@@ -45,41 +45,40 @@ ensureExists (Path.encodeString -> dir) = do
     p <- doesDirectoryExist dir
     unless p $ hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
 
-getFileSizeT :: MonadIO m => Path -> EitherT Error m Size
-getFileSizeT = catchErrorT
+getFileSize :: MonadIO m => Path -> EitherT Error m Size
+getFileSize = catchErrorT
     . fmap (fromIntegral . fileSize)
     . getFileStatus
     . Path.encodeString
 
-hashFileT :: (MonadIO m, HashAlgorithm a)
+hashFile :: (MonadIO m, HashAlgorithm a)
           => Path
           -> EitherT Error m (Digest a)
-hashFileT = catchErrorT . Crypto.hashFile . Path.encodeString
+hashFile = catchErrorT . Crypto.hashFile . Path.encodeString
 
 withTempFile :: Path
              -> String
-             -> (FilePath -> Handle -> IO a)
+             -> (Path -> Handle -> IO a)
              -> IO a
 withTempFile dir tmpl f = do
     (path, hd) <- openTempFile (Path.encodeString dir) tmpl
-    f path hd `finally` removeFile path
+    f (Path.decodeString path) hd `finally` (hClose hd >> removeFile path)
 
 withTempFileT :: MonadIO m
               => Path
               -> String
-              -> (Path -> Handle -> EitherT Error m a)
+              -> (Path -> Handle -> EitherT Error IO a)
               -> EitherT Error m a
-withTempFileT dir tmpl f = do
-    (path, hd) <- catchErrorT $ openTempFile (Path.encodeString dir) tmpl
-    mapEitherT (\x -> liftIO (removeFile path) >> x)
-               (f (Path.decodeString path) hd)
+withTempFileT dir tmpl f =
+    catchErrorT (withTempFile dir tmpl $ \path hd -> runEitherT (f path hd))
+        >>= hoistEither
 
-runShellT :: MonadIO m => String -> EitherT Error m ByteString
-runShellT cmd = do
+runShell :: MonadIO m => String -> EitherT Error m ByteString
+runShell cmd = do
     (c, obs, ebs) <- catchErrorT $ createProcess opts >>= run
     case c of
-        ExitFailure _ -> left  $ shellError (LBS.toStrict ebs)
-        ExitSuccess   -> right $ LBS.toStrict obs
+        ExitFailure _ -> left  (shellError $ LBS.toStrict ebs)
+        ExitSuccess   -> right (LBS.toStrict obs)
   where
     run (Just inh, Just outh, Just errh, hd) = do
         obs <- LBS.hGetContents outh

@@ -227,9 +227,9 @@ routes = do
 addEntry :: Arch ::: Name ::: Vers -> Handler
 addEntry (a ::: n ::: v) = do
     i <- asks appIndex
-    p <- catchErrorT $ Index.sync i >> Index.member a n v i
+    m <- catchErrorT $ Index.sync i >> Index.lookup a n v i
     return $
-        if p
+        if isJust m
             then plain status200 "success\n"
             else plain status404 "not-found\n"
 

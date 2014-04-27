@@ -83,29 +83,29 @@ invalidField   = Error status413
 awsError       = Error status500
 shellError     = Error status500
 
-data Bucket = Bucket
-    { bktBucket :: !Text
-    , bktPrefix :: !Text
-    } deriving (Eq, Show)
-
-instance ToBytes Bucket where
-    bytes (Bucket b p) = Build.byteString $
-        Text.encodeUtf8 b <> "/" <> Text.encodeUtf8 p
-
-instance Buildable Bucket where
-    build (Bucket b p) = build (b <> "/" <> p)
-
-newtype Object = Object Text
+data Bucket = Bucket !Text (Maybe Text)
     deriving (Eq, Show)
 
-objKey :: Object -> Text
-objKey (Object o) = urlEncode o
+bktName :: Bucket -> Text
+bktName (Bucket b _) = b
 
-instance ToBytes Object where
-    bytes = Build.byteString . Text.encodeUtf8 . objKey
+bktPrefix :: Bucket -> Maybe Text
+bktPrefix (Bucket _ m) = m
 
-instance Buildable Object where
-    build = build . objKey
+instance Buildable Bucket where
+    build (Bucket b m) = build b <> build (maybe mempty ("/" <>) m)
+
+newtype Key = Key Text
+    deriving (Eq, Show)
+
+instance ToURL Key where
+    urlEncode (Key t) = urlEncode t
+
+instance ToBytes Key where
+    bytes = Build.byteString . Text.encodeUtf8 . urlEncode
+
+instance Buildable Key where
+    build = build . urlEncode
 
 newtype Name = Name { unName :: ByteString }
     deriving (Eq, Ord, Show, ToBytes)
@@ -123,6 +123,9 @@ data Vers = Vers
 
 instance Ord Vers where
     a `compare` b = verNum a `compare` verNum b
+
+instance ToURL Vers where
+    urlEncode = Text.decodeUtf8 . verRaw
 
 instance ToBytes Vers where
     bytes = Build.byteString . verRaw
@@ -164,39 +167,52 @@ newtype Size = Size { unSize :: Int64 }
 instance ToBytes Size where
     bytes = Build.int64Dec . unSize
 
-data Package = Package
-    { pkgName     :: !Name
-    , pkgVersion  :: !Vers
-    , pkgArch     :: !Arch
-    , pkgSize     :: !Size
-    , pkgMD5Sum   :: !(Digest MD5)
-    , pkgSHA1     :: !(Digest SHA1)
-    , pkgSHA256   :: !(Digest SHA256)
-    , pkgOptional :: Map (CI ByteString) ByteString
+type Object  = Entry Key
+type Package = Entry Meta
+
+data Entry a = Entry
+    { entName :: !Name
+    , entVers :: !Vers
+    , entArch :: !Arch
+    , entAnn  :: !a
     } deriving (Eq, Show)
 
-data Entry = Entry
-    { entKey     :: !Object
-    , entName    :: !Name
-    , entVersion :: !Vers
-    , entArch    :: !Arch
-    , entSize    :: !Size
-    } deriving (Eq, Show)
+instance ToURL Object where
+    urlEncode = urlEncode . entAnn
 
-instance FromByteString (Size -> Entry) where
+instance FromByteString Object where
     parser = do
         k <- takeByteString
         either (fail "Unable to parse Entry") return
-               (parseOnly (sub k) (last $ BS.split '/' k))
+               (parseOnly (p k) (last $ BS.split '/' k))
       where
-        sub k = Entry (Object $ Text.decodeUtf8 k)
+        p k = Entry
             <$> parser <* char '_'
             <*> parser <* char '_'
             <*> parser <* string (Text.encodeUtf8 debExt)
+            <*> pure (Key $ Text.decodeUtf8 k)
 
-urlEncode :: Text -> Text
-urlEncode = LText.toStrict . LBuild.toLazyText . mconcat . map f . Text.unpack
-  where
-    f c | c == '+'  = "%2B"
-        | c == ' '  = "%20"
-        | otherwise =  LBuild.singleton c
+data Meta = Meta
+    { metaSize   :: !Size
+    , metaMD5    :: !(Digest MD5)
+    , metaSHA1   :: !(Digest SHA1)
+    , metaSHA256 :: !(Digest SHA256)
+    , metaOther  :: Map (CI ByteString) ByteString
+    } deriving (Eq, Show)
+
+annotate :: Entry a -> Meta -> Package
+annotate o m = o { entAnn = m }
+
+class ToURL a where
+    urlEncode :: a -> Text
+
+instance ToURL Text where
+    urlEncode = LText.toStrict
+        . LBuild.toLazyText
+        . mconcat
+        . map f
+        . Text.unpack
+      where
+        f c | c == '+'  = "%2B"
+            | c == ' '  = "%20"
+            | otherwise = LBuild.singleton c

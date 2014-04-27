@@ -51,39 +51,42 @@ import           System.APT.Types
 import           System.IO                        (hClose)
 
 -- Binary packages:
--- They always follow a rigid naming convention: package-name_version_arch.deb.
+-- Always follow a rigid naming convention: package-name_version_arch.deb.
 
 toBuilder :: Package -> Builder
-toBuilder Package{..} = (<> "\n") . mconcat . intersperse "\n" $
-    [ "Package: "      =@ pkgName
-    , "Version: "      =@ pkgVersion
-    , "Architecture: " =@ toByteString pkgArch
-    , "Size: "         =@ toByteString pkgSize
-    , "MD5Sum: "       =@ base16 pkgMD5Sum
-    , "SHA1: "         =@ base16 pkgSHA1
-    , "SHA256: "       =@ base16 pkgSHA256
-    ] ++ map (Build.byteString . line) (Map.toList pkgOptional)
+toBuilder Entry{..} = (<> "\n") . mconcat . intersperse "\n" $
+    [ "Package: "      =@ entName
+    , "Version: "      =@ entVers
+    , "Architecture: " =@ toByteString entArch
+    , "Size: "         =@ toByteString metaSize
+    , "MD5Sum: "       =@ base16 metaMD5
+    , "SHA1: "         =@ base16 metaSHA1
+    , "SHA256: "       =@ base16 metaSHA256
+    ] ++ map (Build.byteString . line) (Map.toList metaOther)
   where
     (=@) k = mappend k . bytes
 
-    line (k, v) = upcase (CI.original k) <> ": " <> v
+    Meta{..} = entAnn
+    line (k, v)  = upcase (CI.original k) <> ": " <> v
 
     upcase k
         | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
         | otherwise                   = k
 
 toHeaders :: Package -> [Header]
-toHeaders Package{..} =
-    [ ("content-md5",  base64 pkgMD5Sum)
+toHeaders Entry{..} =
+    [ ("content-md5",  base64 metaMD5)
     , ("content-type", "application/x-deb")
-    ] ++ [ "package"      =@ pkgName
-         , "version"      =@ pkgVersion
-         , "architecture" =@ toByteString pkgArch
-         , "sha1"         =@ base16 pkgSHA1
-         , "sha256"       =@ base16 pkgSHA256
+    ] ++ [ "package"      =@ entName
+         , "version"      =@ entVers
+         , "architecture" =@ toByteString entArch
+         , "sha1"         =@ base16 metaSHA1
+         , "sha256"       =@ base16 metaSHA256
          ]
   where
     (=@) k = (CI.mk headerPrefix <> k,) . toByteString
+
+    Meta{..} = entAnn
 
 fromHeaders :: [Header] -> Either Error Package
 fromHeaders xs = join $ fromMap hs
@@ -108,15 +111,11 @@ fromMap :: Map (CI ByteString) ByteString
         -> Digest SHA1
         -> Digest SHA256
         -> Either Error Package
-fromMap fs size md5 sha1 sha256 = Package
+fromMap fs size md5 sha1 sha256 = Entry
     <$> require "package" fs
     <*> require "version" fs
     <*> require "architecture" fs
-    <*> pure size
-    <*> pure md5
-    <*> pure sha1
-    <*> pure sha256
-    <*> pure fields
+    <*> pure (Meta size md5 sha1 sha256 fields)
   where
     fields = Map.map (BS.take 1024)
         $ Map.filterWithKey (const . (`elem` optional)) fs
@@ -139,16 +138,18 @@ fromFile :: MonadIO m
          => Path
          -> Source IO ByteString
          -> EitherT Error m Package
-fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
-    catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
-    let f = Path.encodeString path
-    bs <- runShellT $ "ar -p " ++ f ++ " control.tar.gz | tar -Ox control"
-    fs <- hoistEither (fields bs)
-    hoistEither =<< fromMap fs
-        <$> getFileSizeT path
-        <*> hashFileT path
-        <*> hashFileT path
-        <*> hashFileT path
+fromFile tmp src =
+    withTempFileT tmp ".deb" $ \path hd -> do
+        catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
+        bs <- runShell $ "ar -p "
+             ++ Path.encodeString path
+             ++ " control.tar.gz | tar -Ox control"
+        fs <- hoistEither (fields bs)
+        hoistEither =<< fromMap fs
+            <$> getFileSize path
+            <*> hashFile path
+            <*> hashFile path
+            <*> hashFile path
   where
     fields = field (Map.fromList . map (first CI.mk)) parser
 

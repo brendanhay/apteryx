@@ -36,4 +36,5 @@ bucketOption = fmap (mk . Text.pack) . strOption
     mk t =
         case Text.split (== '/') t of
             []     -> error "Bucket cannot be blank."
-            (x:xs) -> Bucket x (Text.intercalate "/" xs)
+            (x:[]) -> Bucket x Nothing
+            (x:xs) -> Bucket x (Just $ Text.intercalate "/" xs)
