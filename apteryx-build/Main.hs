@@ -23,6 +23,7 @@ import           Control.Concurrent.ThreadPool
 import           Data.ByteString               (ByteString)
 import           Data.Monoid
 import           Network.AWS
+import           Network.AWS.S3 (gbrContents, bcKey)
 import           Options.Applicative
 import           System.APT.IO
 import qualified System.APT.Index              as Index
@@ -154,10 +155,10 @@ main = do
     s  <- Store.new optFrom optVersions <$> loadEnv optDebug
 
     say n "Looking for entries in {}..." [optFrom]
-    xs <- concat <$> Store.entries s
+    xs <- Store.entries s
 
-    say n "Discovered {} packages." [length xs]
-    mapM_ (say n "Found {}" . (:[]) . entAnn) xs
+    -- say n "Discovered {} packages." [length xs]
+    mapM_ (print . bcKey) (concatMap gbrContents xs)
 
 --    say n "Copying to {}..." [optTo]
   --   parForM optN (worker s optTemp optTo) (const $ return ()) xs

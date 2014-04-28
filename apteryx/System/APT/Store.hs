@@ -152,30 +152,30 @@ copy from to bkt s = aws s $
 
 -- | Get a flattened list of objects starting at the store's prefix,
 --   adhering to the version limit and returning a list ordered by version.
-entries :: MonadIO m => Store -> m [[Object]]
+--entries :: MonadIO m => Store -> m [[Object]]
 entries s = aws s $
-       paginate start
-    $= Conduit.concatMap (filter match . gbrContents)
-    $$ catalogue mempty
+       paginate start $$ Conduit.consume
+    -- $= Conduit.concatMap (filter match . gbrContents)
+    -- $$ catalogue mempty
   where
-    start  = GetBucket (bucketName s) (Delimiter '/') prefix 2 Nothing
+    start  = GetBucket (bucketName s) (Delimiter '/') prefix 6 Nothing
     prefix = bktPrefix (_bucket s)
 
-    match Contents{..}
-        | bcSize == 0               = False
-        | bcStorageClass == Glacier = False
-        | otherwise                 = debExt `Text.isSuffixOf` bcKey
+    -- match Contents{..}
+    --     | bcSize == 0               = False
+    --     | bcStorageClass == Glacier = False
+    --     | otherwise                 = debExt `Text.isSuffixOf` bcKey
 
-    catalogue m = maybe (return $ Map.elems m) (catalogue . entry m)
-        =<< await
+    -- catalogue m = maybe (return $ Map.elems m) (catalogue . entry m)
+    --     =<< await
 
-    entry m Contents{..} =
-        maybe m (\x -> Map.insertWith insert (entArch x, entName x) [x] m)
-                (BS.fromByteString (Text.encodeUtf8 bcKey))
+    -- entry m Contents{..} =
+    --     maybe m (\x -> Map.insertWith insert (entArch x, entName x) [x] m)
+    --             (BS.fromByteString (Text.encodeUtf8 bcKey))
 
-    insert xs = take (_versions s)
-        . sortBy (compare `on` (Down . entVers))
-        . mappend xs
+    -- insert xs = take (_versions s)
+    --     . sortBy (compare `on` (Down . entVers))
+    --     . mappend xs
 
 -- | Run an AWS action using the store's environment.
 -- FIXME: proper error handling
