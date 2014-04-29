@@ -23,7 +23,6 @@ import           Control.Concurrent.ThreadPool
 import           Data.ByteString               (ByteString)
 import           Data.Monoid
 import           Network.AWS
-import           Network.AWS.S3 (gbrContents, bcKey)
 import           Options.Applicative
 import           System.APT.IO
 import qualified System.APT.Index              as Index
@@ -155,30 +154,28 @@ main = do
     s  <- Store.new optFrom optVersions <$> loadEnv optDebug
 
     say n "Looking for entries in {}..." [optFrom]
-    xs <- Store.entries s
+    xs <- concat <$> Store.entries s
 
-    -- say n "Discovered {} packages." [length xs]
-    mapM_ (print . bcKey) (concatMap gbrContents xs)
+    mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
 
---    say n "Copying to {}..." [optTo]
-  --   parForM optN (worker s optTemp optTo) (const $ return ()) xs
+    say n "Copying to {}..." [optTo]
+    parForM optN (worker s optTemp optTo) (const $ return ()) xs
 
-  --   maybe (return ())
-  --         (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
-  --         optAddress
+    maybe (return ())
+          (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
+          optAddress
 
-  --   say_ n "Done."
-  -- where
-  --   worker s tmp dest o@Entry{..} = do
-  --       n <- (mappend "worker-") . drop 9 . show <$> myThreadId
+    say_ n "Done."
+  where
+    worker s tmp dest o@Entry{..} = do
+        n <- (mappend "worker-") . drop 9 . show <$> myThreadId
 
-  --       say n "Retrieving {}" [entAnn]
-  --       m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
+        say n "Retrieving {}" [entAnn]
+        m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
 
-  --       maybe (say n "Unable to retrieve package from {}" [entAnn])
-  --             (\x -> do
-  --                 say n "Read package description from {}" [entAnn]
-  --                 Store.copy o x dest s
-  --                 say n "Copied {} to {}" [build entAnn, build dest])
-  --             m
-
+        maybe (say n "Unable to retrieve package from {}" [entAnn])
+              (\x -> do
+                  say n "Read package description from {}" [entAnn]
+                  Store.copy o x dest s
+                  say n "Copied {} to {}" [build entAnn, build dest])
+              m

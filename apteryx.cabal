@@ -39,7 +39,7 @@ library
         , System.APT.Types
 
     build-depends:
-          amazonka             >= 0.3.9
+          amazonka             >= 0.4.0
         , async
         , attoparsec
         , base                 >= 4.6 && < 5
