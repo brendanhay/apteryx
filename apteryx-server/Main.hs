@@ -33,7 +33,6 @@ import           Data.Maybe
 import           Data.Monoid
 import           Data.String
 import           Data.Word
-import qualified Filesystem.Path.CurrentOS   as Path
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
@@ -43,10 +42,10 @@ import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (concatMap, head)
 import           System.APT.IO
-import           System.APT.Index            (Index)
 import qualified System.APT.Index            as Index
 import           System.APT.Log
 import           System.APT.Options
+import           System.APT.Store            (Store)
 import qualified System.APT.Store            as Store
 import           System.APT.Types
 import qualified System.Logger               as Log
@@ -60,7 +59,6 @@ data Options = Options
     , optKey      :: !Bucket
     , optTemp     :: !Path
     , optWWW      :: !Path
-    , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
@@ -106,14 +104,6 @@ options = Options
          )
 
     <*> option
-         ( long "concurrency"
-        <> short 'c'
-        <> metavar "INT"
-        <> help "Maximum number of packages to process concurrently. [default: 6]"
-        <> value 6
-         )
-
-    <*> option
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
@@ -128,14 +118,15 @@ options = Options
          )
 
 data Env = Env
-    { appIndex  :: Index
-    , appLogger :: Logger
+    { appOptions :: !Options
+    , appStore   :: !Store
+    , appLogger  :: !Logger
     }
 
 newEnv :: Options -> IO Env
-newEnv Options{..} = do
-    s <- Store.new optKey optVersions <$> loadEnv optDebug
-    Env <$> Index.new optN optWWW optTemp s <*> newLogger
+newEnv o@Options{..} = Env o
+    <$> (Store.new optKey optVersions <$> loadEnv optDebug)
+    <*> newLogger
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -183,10 +174,11 @@ main = parseOptions options >>= serve
 
 serve :: Options -> IO ()
 serve o@Options{..} = do
+    say_ "AWS" "Discovering credentials..."
     e@Env{..} <- newEnv o
     Log.info appLogger $ msg "Apteryx server starting..."
     Log.info appLogger $ msg "Syncing package database..."
-    Index.sync appIndex
+--    Index.sync appIndex
     Log.info appLogger $ msg "Sync complete."
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
@@ -211,43 +203,53 @@ serve o@Options{..} = do
 
 routes :: Routes a (EitherT Error App) ()
 routes = do
-    get   "/i/status" (const $ return blank) true
-    head  "/i/status" (const $ return blank) true
+    get  "/i/status"    (const $ return blank) true
+    head "/i/status"    (const $ return blank) true
 
-    patch "/packages/:arch/:name/:vers" addEntry $
-            capture "arch"
-        .&. capture "name"
-        .&. capture "vers"
+    get  "/Packages"    (const getIndex) true
+    get  "/Packages.xz" (const getIndex) true
 
-    post  "/packages" (const triggerRebuild) true
-    get   "/Packages" (const getIndex) true
-  where
-    patch = addRoute "PATCH"
+    post "/packages"    (const triggerRebuild) true
 
-addEntry :: Arch ::: Name ::: Vers -> Handler
-addEntry (a ::: n ::: v) = do
-    i <- asks appIndex
-    m <- catchErrorT $ Index.sync i >> Index.lookup a n v i
-    return $
-        if isJust m
-            then plain status200 "success\n"
-            else plain status404 "not-found\n"
+    -- addRoute "PATCH" "/packages/:arch/:name/:vers" addEntry $
+    --         capture "arch"
+    --     .&. capture "name"
+    --     .&. capture "vers"
+
+-- addEntry :: Arch ::: Name ::: Vers -> Handler
+-- addEntry (a ::: n ::: v) = do
+    -- i <- asks appIndex
+    -- m <- catchErrorT $ Index.sync i >> Index.lookup a n v i
+    -- return $
+    --     if isJust m
+    --         then plain status200 "success\n"
+    --         else plain status404 "not-found\n"
 
 triggerRebuild :: Handler
 triggerRebuild = do
-    i <- asks appIndex
-    p <- catchErrorT $ Index.trySync i
-    return $
-        if p
-           then plain status202 "rebuilding-index\n"
-           else plain status200 "in-progress\n"
+    Env{..} <- ask
+
+    let Options{..} = appOptions
+
+    sayT_ "rebuild" "Rebuilding..."
+
+    -- ReadWrite lock for rebuilding index
+
+    -- Write the Packages file incrementally,
+    --   only the Components -> [Arch] needs to be maintained
+
+    catchErrorT $ Index.latest "origin" "label" "codename" "description" appStore
+        >>= Index.write optTemp optWWW
+
+    return $ plain status202 "rebuilding-index\n"
+
+--           else plain status200 "in-progress\n"
 
 getIndex :: Handler
-getIndex = do
-    i <- asks appIndex
-    catchErrorT $ Index.syncIfMissing i
-    let path = Path.encodeString (Index.path i)
-    return $ responseFile status200 [] path Nothing
+getIndex = undefined
+    -- i <- asks appIndex
+    -- let path = Path.encodeString (Index.path i)
+    -- return $ responseFile status200 [] path Nothing
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
