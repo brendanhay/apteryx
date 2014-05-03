@@ -16,6 +16,7 @@
 
 module System.APT.IO where
 
+import           Control.Applicative
 import           Control.Concurrent.Async
 import           Control.DeepSeq
 import           Control.Error
@@ -23,7 +24,6 @@ import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Catch        hiding (try, finally)
 import           Control.Monad.IO.Class
-import           Crypto.Hash
 import qualified Crypto.Hash.Conduit        as Crypto
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
@@ -38,23 +38,25 @@ import           System.Process
 
 default (ByteString)
 
-ensureExists :: Path -> IO ()
-ensureExists (Path.encodeString -> dir) = do
+ensureExists :: MonadIO m => Path -> m ()
+ensureExists (Path.encodeString -> dir) = liftIO $ do
     createDirectoryIfMissing True dir
     -- Ensure any permission errors are caught.
     p <- doesDirectoryExist dir
     unless p $ hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
 
-getFileSize :: MonadIO m => Path -> EitherT Error m Size
-getFileSize = catchErrorT
-    . fmap (fromIntegral . fileSize)
-    . getFileStatus
-    . Path.encodeString
+-- getFileSize :: MonadIO m => Path -> EitherT Error m Size
+-- getFileSize = catchErrorT
+--     . fmap (fromIntegral . fileSize)
+--     . getFileStatus
+--     . Path.encodeString
 
-hashFile :: (MonadIO m, HashAlgorithm a)
-          => Path
-          -> EitherT Error m (Digest a)
-hashFile = catchErrorT . Crypto.hashFile . Path.encodeString
+getFileStat :: MonadIO m => Path -> m Stat
+getFileStat (Path.encodeString -> path) = liftIO $ Stat
+    <$> (fromIntegral . fileSize <$> getFileStatus path)
+    <*> Crypto.hashFile path
+    <*> Crypto.hashFile path
+    <*> Crypto.hashFile path
 
 withTempFile :: Path
              -> String

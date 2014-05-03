@@ -54,5 +54,5 @@ sayT :: (MonadLogger m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
 sayT lbl fmt ps = LogT.info . field (toByteString lbl) $ Text.format fmt ps
 
 logger :: Logger
-logger = Unsafe.unsafePerformIO $ newLogger
+logger = Unsafe.unsafePerformIO newLogger
 {-# NOINLINE logger #-}
