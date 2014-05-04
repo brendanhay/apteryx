@@ -79,7 +79,7 @@ class Keyed a where
         name = Text.decodeUtf8 (unName entName)
 
 instance Keyed ()
-instance Keyed Meta
+instance Keyed (Stat, Meta)
 
 instance Keyed Key where
     objectKey = const . urlEncode
@@ -104,7 +104,7 @@ add p (Path.encodeString -> path) s = aws s $
         , poBody    = requestBodySource size (Conduit.sourceFile path)
         }
   where
-    size = unSize . metaSize $ entAnn p
+    size = unSize . statSize $ stat p
 
 get :: (MonadIO m, Keyed a)
     => Entry a
@@ -150,7 +150,7 @@ copy from to bkt s = aws s $
         , pocHeaders   = Pkg.toHeaders to
         }
 
--- | Get a flattened list of objects starting at the store's prefix,
+-- | Get a list of objects starting at the store's prefix,
 --   adhering to the version limit and returning a list ordered by version.
 entries :: MonadIO m => Store -> m [[Object]]
 entries s = aws s $ paginate start

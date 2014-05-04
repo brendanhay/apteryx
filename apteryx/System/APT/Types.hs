@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE StandaloneDeriving         #-}
 
@@ -21,29 +22,63 @@ module System.APT.Types
     ) where
 
 import           Control.Applicative
+import           Control.Applicative              hiding (optional)
+import           Control.Arrow
+import           Control.DeepSeq
+import           Control.Error
 import           Control.Error
 import           Control.Exception
+import           Control.Monad
+import           Control.Monad.IO.Class
+import           Crypto.Hash
 import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
+import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
+import           Data.ByteString                  (ByteString)
+import qualified Data.ByteString.Base16           as Base16
+import qualified Data.ByteString.Base16           as Base16
+import qualified Data.ByteString.Base64           as Base64
+import           Data.ByteString.Builder          (Builder)
+import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
+import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From
+import           Data.ByteString.From             (FromByteString)
 import qualified Data.ByteString.Lazy.Char8       as LBS
+import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
+import           Data.CaseInsensitive             (CI)
+import qualified Data.CaseInsensitive             as CI
+import           Data.Char                        (isAlpha, toUpper)
+import           Data.Conduit
+import qualified Data.Conduit.Binary              as Conduit
+import qualified Data.Foldable                    as Fold
 import           Data.Int
+import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
+import           Data.Map.Strict                  (Map)
+import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
+import           Data.Monoid
+import           Data.Set                         (Set)
+import qualified Data.Set                         as Set
 import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
 import           Data.Text.Buildable
 import qualified Data.Text.Encoding               as Text
 import qualified Data.Text.Lazy                   as LText
 import qualified Data.Text.Lazy.Builder           as LBuild
+import           Data.Time
 import           Data.Typeable
 import qualified Filesystem.Path.CurrentOS        as Path
+import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
+import           Network.HTTP.Types.Header
 import           Network.HTTP.Types.Status
+import           System.IO                        (hClose)
+import           System.Locale
 import           System.Logger.Message            (ToBytes(..))
 
 debExt :: Text
@@ -54,6 +89,26 @@ toByteString = LBS.toStrict . Build.toLazyByteString . bytes
 
 fromByteString :: FromByteString a => ByteString -> Either Error a
 fromByteString = fmapL (invalidField . BS.pack) . runParser parser
+
+base16 :: Digest a -> ByteString
+base16 = Base16.encode . toBytes
+
+base64 :: Digest a -> ByteString
+base64 = Base64.encode . toBytes
+
+class ToURL a where
+    urlEncode :: a -> Text
+
+instance ToURL Text where
+    urlEncode = LText.toStrict
+        . LBuild.toLazyText
+        . mconcat
+        . map f
+        . Text.unpack
+      where
+        f c | c == '+'  = "%2B"
+            | c == ' '  = "%20"
+            | otherwise = LBuild.singleton c
 
 type Path = Path.FilePath
 
@@ -146,10 +201,15 @@ data Arch
     | I386
       deriving (Eq, Ord, Show)
 
+instance NFData Arch
+
 instance ToBytes Arch where
     bytes Other = "all"
     bytes Amd64 = "amd64"
     bytes I386  = "i386"
+
+instance ToBytes [Arch] where
+    bytes = mconcat . intersperse " " . map bytes
 
 instance Buildable Arch where
     build Other = "all"
@@ -167,15 +227,45 @@ newtype Size = Size { unSize :: Int64 }
 instance ToBytes Size where
     bytes = Build.int64Dec . unSize
 
+data Stat = Stat
+    { statSize   :: !Size
+    , statMD5    :: !(Digest MD5)
+    , statSHA1   :: !(Digest SHA1)
+    , statSHA256 :: !(Digest SHA256)
+    } deriving (Eq, Ord, Show)
+
+instance NFData Stat
+
+data Meta = Meta
+    { metaComps :: [ByteString]
+    , metaOther :: Map (CI ByteString) ByteString
+    } deriving (Eq, Ord, Show)
+
+instance NFData Meta
+
 type Object  = Entry Key
-type Package = Entry Meta
+type Package = Entry (Stat, Meta)
 
 data Entry a = Entry
     { entName :: !Name
     , entVers :: !Vers
     , entArch :: !Arch
     , entAnn  :: !a
-    } deriving (Eq, Show)
+    } deriving (Eq, Ord, Show)
+
+instance NFData a => NFData (Entry a)
+
+stat :: Package -> Stat
+stat = fst . entAnn
+
+meta :: Package -> Meta
+meta = snd . entAnn
+
+comps :: Package -> [Text]
+comps = map Text.decodeUtf8 . metaComps . meta
+
+annotate :: Stat -> Meta -> Entry a -> Package
+annotate s m o = o { entAnn = (s, m) }
 
 instance ToURL Object where
     urlEncode = urlEncode . entAnn
@@ -192,27 +282,89 @@ instance FromByteString Object where
             <*> parser <* string (Text.encodeUtf8 debExt)
             <*> pure (Key $ Text.decodeUtf8 k)
 
-data Meta = Meta
-    { metaSize   :: !Size
-    , metaMD5    :: !(Digest MD5)
-    , metaSHA1   :: !(Digest SHA1)
-    , metaSHA256 :: !(Digest SHA256)
-    , metaOther  :: Map (CI ByteString) ByteString
+instance ToBytes Package where
+    bytes p@Entry{..} = joinLines $
+        [ "Package: "      =@ entName
+        , "Version: "      =@ entVers
+        , "Architecture: " =@ toByteString entArch
+        , "Size: "         =@ toByteString statSize
+        , "MD5sum: "       =@ base16 statMD5 -- Explicitly lowercase s in MD5sum.
+        , "SHA1: "         =@ base16 statSHA1
+        , "SHA256: "       =@ base16 statSHA256
+        ] ++ map (Build.byteString . line) (Map.toList . metaOther $ meta p)
+      where
+        Stat{..} = stat p
+
+        line (k, v) = upcase (CI.original k) <> ": " <> v
+
+        upcase k
+            | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
+            | otherwise                   = k
+
+data Index = Index
+    { idxRel  :: !Path
+    , idxStat :: !Stat
     } deriving (Eq, Show)
 
-annotate :: Entry a -> Meta -> Package
-annotate o m = o { entAnn = m }
+instance NFData Index
 
-class ToURL a where
-    urlEncode :: a -> Text
-
-instance ToURL Text where
-    urlEncode = LText.toStrict
-        . LBuild.toLazyText
-        . mconcat
-        . map f
-        . Text.unpack
+instance ToBytes [Index] where
+    bytes ids =
+           csum "MD5Sum:\n" statMD5
+        <> csum "SHA1:\n"   statSHA1
+        <> csum "SHA256:\n" statSHA256
       where
-        f c | c == '+'  = "%2B"
-            | c == ' '  = "%20"
-            | otherwise = LBuild.singleton c
+        csum :: Builder -> (Stat -> Digest a) -> Builder
+        csum k f = mappend k $ Fold.foldMap (line f) ids
+        line f x = mconcat
+            [ " " =@ base16 (f $ idxStat x)
+            , " " =@ statSize (idxStat x)
+            , " " =@ Path.encode (idxRel x)
+            , "\n"
+            ]
+
+data Control = Control
+    { ctlOrigin :: !Text
+    , ctlLabel  :: !Text
+    , ctlComp   :: !Text
+    , ctlArch   :: !Arch
+    } deriving (Eq, Show)
+
+instance ToBytes Control where
+    bytes Control{..} = joinLines
+        [ "Origin: "       =@ ctlOrigin
+        , "Label: "        =@ ctlLabel
+        , "Component: "    =@ ctlComp
+        , "Architecture: " =@ ctlArch
+        ]
+
+data InRelease = InRelease
+    { relOrigin :: !Text
+    , relLabel  :: !Text
+    , relCode   :: !Text
+    , relDate   :: !UTCTime
+    , relUntil  :: !UTCTime
+    , relDesc   :: !Text
+    , relPkgs   :: Map Text (Map Arch (Set Package))
+    } deriving (Eq, Show)
+
+instance ToBytes InRelease where
+    bytes InRelease{..} = joinLines $
+        [ "Origin: "        =@ relOrigin
+        , "Label: "         =@ relLabel
+        , "Codename: "      =@ relCode
+        , "Date: "          =@ time relDate
+        , "Valid-Until: "   =@ time relUntil
+        , "Components: "    =@ Text.intercalate " " (Map.keys relPkgs)
+        , "Architectures: " =@ concatMap Map.keys (Map.elems relPkgs)
+        , "Description: "   =@ relDesc
+        ]
+
+(=@) :: ToBytes a => Builder -> a -> Builder
+(=@) k = mappend k . bytes
+
+time :: UTCTime -> ByteString
+time = BS.pack . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S UTC"
+
+joinLines :: [Builder] -> Builder
+joinLines = Fold.foldMap (<> "\n")

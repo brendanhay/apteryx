@@ -13,8 +13,11 @@
 -- Portability : non-portable (GHC extensions)
 
 module System.APT.Package
-    ( toBuilder
-    , toHeaders
+    (
+    -- * Serialisation
+      toHeaders
+
+    -- * Deserialisation
     , fromHeaders
     , fromMap
     , fromFile
@@ -29,18 +32,16 @@ import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Base16           as Base16
-import qualified Data.ByteString.Base64           as Base64
 import           Data.ByteString.Builder          (Builder)
 import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From             (FromByteString)
-import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
 import           Data.Char                        (isAlpha, toUpper)
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
-import           Data.List                        (intersperse)
+import qualified Data.Foldable                    as Fold
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
@@ -50,52 +51,29 @@ import           System.APT.IO
 import           System.APT.Types
 import           System.IO                        (hClose)
 
--- Binary packages:
--- Always follow a rigid naming convention: package-name_version_arch.deb.
-
-toBuilder :: Package -> Builder
-toBuilder Entry{..} = (<> "\n") . mconcat . intersperse "\n" $
-    [ "Package: "      =@ entName
-    , "Version: "      =@ entVers
-    , "Architecture: " =@ toByteString entArch
-    , "Size: "         =@ toByteString metaSize
-    , "MD5Sum: "       =@ base16 metaMD5
-    , "SHA1: "         =@ base16 metaSHA1
-    , "SHA256: "       =@ base16 metaSHA256
-    ] ++ map (Build.byteString . line) (Map.toList metaOther)
-  where
-    (=@) k = mappend k . bytes
-
-    Meta{..} = entAnn
-    line (k, v)  = upcase (CI.original k) <> ": " <> v
-
-    upcase k
-        | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
-        | otherwise                   = k
-
 toHeaders :: Package -> [Header]
-toHeaders Entry{..} =
-    [ ("content-md5",  base64 metaMD5)
+toHeaders p@Entry{..} =
+    [ ("content-md5",  base64 statMD5)
     , ("content-type", "application/x-deb")
-    ] ++ [ "package"      =@ entName
-         , "version"      =@ entVers
-         , "architecture" =@ toByteString entArch
-         , "sha1"         =@ base16 metaSHA1
-         , "sha256"       =@ base16 metaSHA256
+    ] ++ [ "package"      =: entName
+         , "version"      =: entVers
+         , "architecture" =: toByteString entArch
+         , "sha1"         =: base16 statSHA1
+         , "sha256"       =: base16 statSHA256
          ]
   where
-    (=@) k = (CI.mk headerPrefix <> k,) . toByteString
+    (=:) k = (CI.mk headerPrefix <> k,) . toByteString
 
-    Meta{..} = entAnn
+    Stat{..} = stat p
 
 fromHeaders :: [Header] -> Either Error Package
-fromHeaders xs = join $ fromMap hs
-    <$> size "content-length"
-    <*> digest "etag" (BS.init . BS.tail)
-    <*> digest "sha1" id
-    <*> digest "sha256" id
+fromHeaders xs = fromMap hs `ap` st
   where
-    size k = require k hs >>= field Size decimal
+    st = Stat
+        <$> (require "content-length" hs >>= field Size decimal)
+        <*> digest "etag" (BS.init . BS.tail)
+        <*> digest "sha1" id
+        <*> digest "sha256" id
 
     digest k f = require k hs >>= \e ->
         let bs  = fst . Base16.decode $ f e
@@ -105,18 +83,17 @@ fromHeaders xs = join $ fromMap hs
 
     hs = Map.fromList $ map (first stripPrefix) xs
 
-fromMap :: Map (CI ByteString) ByteString
-        -> Size
-        -> Digest MD5
-        -> Digest SHA1
-        -> Digest SHA256
-        -> Either Error Package
-fromMap fs size md5 sha1 sha256 = Entry
-    <$> require "package" fs
-    <*> require "version" fs
-    <*> require "architecture" fs
-    <*> pure (Meta size md5 sha1 sha256 fields)
+fromMap :: Map (CI ByteString) ByteString -> Either Error (Stat -> Package)
+fromMap fs = do
+    e <- Entry
+        <$> require "package" fs
+        <*> require "version" fs
+        <*> require "architecture" fs
+        <*> pure ()
+    return $ \st -> annotate st (Meta comps fields) e
   where
+    comps = fromMaybe ["main"] $ BS.words <$> Map.lookup "components" fs
+
     fields = Map.map (BS.take 1024)
         $ Map.filterWithKey (const . (`elem` optional)) fs
 
@@ -138,18 +115,12 @@ fromFile :: MonadIO m
          => Path
          -> Source IO ByteString
          -> EitherT Error m Package
-fromFile tmp src =
-    withTempFileT tmp ".deb" $ \path hd -> do
-        catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
-        bs <- runShell $ "ar -p "
-             ++ Path.encodeString path
-             ++ " control.tar.gz | tar -Ox control"
-        fs <- hoistEither (fields bs)
-        hoistEither =<< fromMap fs
-            <$> getFileSize path
-            <*> hashFile path
-            <*> hashFile path
-            <*> hashFile path
+fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
+    catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
+    bs <- runShell $ "ar -p "
+         ++ Path.encodeString path
+         ++ " control.tar.gz | tar -Ox control"
+    hoistEither (fields bs >>= fromMap) `ap` getFileStat path
   where
     fields = field (Map.fromList . map (first CI.mk)) parser
 
@@ -162,12 +133,6 @@ fromFile tmp src =
         , endOfLine >> return True
         , endOfInput >> return True
         ]
-
-base16 :: Digest a -> ByteString
-base16 = Base16.encode . toBytes
-
-base64 :: Digest a -> ByteString
-base64 = Base64.encode . toBytes
 
 require :: FromByteString a
         => CI ByteString
