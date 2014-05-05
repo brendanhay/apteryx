@@ -21,12 +21,12 @@
 module Main (main) where
 
 import           Control.Applicative
+import           Control.Concurrent
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
-import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
@@ -51,7 +51,7 @@ import           System.APT.Types
 import qualified System.Logger               as Log
 import           System.LoggerT              hiding (Error)
 
-default (ByteString)
+default (Builder)
 
 data Options = Options
     { optHost     :: !String
@@ -134,14 +134,14 @@ data Env = Env
     { appOptions :: !Options
     , appStore   :: !Store
     , appLogger  :: !Logger
---    , appLock    :: MVar ()
+    , appLock    :: MVar ()
     }
 
 newEnv :: Options -> IO Env
 newEnv o@Options{..} = Env o
     <$> (Store.new optKey optVersions <$> discoverAWSEnv optDebug)
     <*> newLogger
---    <*> newRWLockIO
+    <*> newMVar ()
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -189,12 +189,11 @@ main = parseOptions options >>= serve
 
 serve :: Options -> IO ()
 serve o@Options{..} = do
-    say_ "AWS" "Discovering credentials..."
+    say_ "aws" "Discovering credentials..."
     e@Env{..} <- newEnv o
-    Log.info appLogger $ msg "Apteryx server starting..."
-    Log.info appLogger $ msg "Syncing package database..."
---    Index.sync appIndex
-    Log.info appLogger $ msg "Sync complete."
+    say_ "index" "Syncing package database..."
+    Index.latest (spec o) appStore >>= Index.generate optTemp optWWW
+    say_ "server" "Apteryx server starting..."
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
     middleware e = logRequest (appLogger e) . GZip.gzip GZip.def $ handler e
@@ -246,21 +245,25 @@ triggerRebuild :: Handler
 triggerRebuild = do
     Env{..} <- ask
 
-    let Options{..} = appOptions
-        rel         = mkInRelease "origin" "label" "codename" "description"
+    let o@Options{..} = appOptions
 
-    sayT_ "rebuild" "Rebuilding..."
+    p <- catchError . sync appLock $
+        Index.latest (spec o) appStore >>= Index.generate optTemp optWWW
 
-    -- ReadWrite lock for rebuilding index
+    respond $ if p
+       then ("Triggering rebuild...", status202, "triggered-rebuild\n")
+       else ("In progress.", status200, "rebuild-in-progress\n")
 
-    
+  where
+    respond (m, st, r) = sayT_ "rebuild" m >> return (plain st r)
 
-    catchError $ Index.latest rel appStore
-             >>= Index.generate optTemp optWWW
-
-    return $ plain status202 "rebuilding-index\n"
-
---           else plain status200 "in-progress\n"
+    sync l f = do
+        m <- tryTakeMVar l
+        maybe (return False)
+              (\v -> do
+                  void $ f `forkFinally` const (putMVar l v)
+                  return True)
+              m
 
 getIndex :: Handler
 getIndex = undefined
@@ -304,3 +307,5 @@ logRequest l app rq = do
         +++ fromMaybe mempty (lookup "referer" $ requestHeaders rq)
         +++ '"'
     return rs
+
+spec Options{..} = mkInRelease "origin" "label" "codename" "description"
