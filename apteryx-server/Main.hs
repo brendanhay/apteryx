@@ -57,11 +57,24 @@ data Options = Options
     { optHost     :: !String
     , optPort     :: !Word16
     , optKey      :: !Bucket
-    , optTemp     :: !Path
-    , optWWW      :: !Path
+    , optTemp     :: !FilePath
+    , optWWW      :: !FilePath
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
+
+-- - Additional flags
+--   Origin
+--   Label
+--   Codename/Distribution
+--   Valid-Until
+--   Description
+
+-- - InRelease signing
+
+-- - Add distribution
+--   Requires uploader being able to upload to specific distros, or none (equates to all)
+--   Need to write out the indicies per distro
 
 options :: Parser Options
 options = Options
@@ -87,7 +100,7 @@ options = Options
         <> help "Source S3 bucket and optional prefix to traverse for packages. [required]"
          )
 
-    <*> pathOption
+    <*> strOption
          ( long "tmp"
         <> short 't'
         <> metavar "PATH"
@@ -95,7 +108,7 @@ options = Options
         <> value "/tmp"
          )
 
-    <*> pathOption
+    <*> strOption
          ( long "www"
         <> short 'w'
         <> metavar "PATH"
@@ -121,12 +134,14 @@ data Env = Env
     { appOptions :: !Options
     , appStore   :: !Store
     , appLogger  :: !Logger
+--    , appLock    :: MVar ()
     }
 
 newEnv :: Options -> IO Env
 newEnv o@Options{..} = Env o
-    <$> (Store.new optKey optVersions <$> loadEnv optDebug)
+    <$> (Store.new optKey optVersions <$> discoverAWSEnv optDebug)
     <*> newLogger
+--    <*> newRWLockIO
 
 closeEnv :: Env -> IO ()
 closeEnv = Log.close . appLogger
@@ -206,10 +221,12 @@ routes = do
     get  "/i/status"    (const $ return blank) true
     head "/i/status"    (const $ return blank) true
 
-    get  "/Packages"    (const getIndex) true
-    get  "/Packages.xz" (const getIndex) true
-
     post "/packages"    (const triggerRebuild) true
+
+    get  "binary-:arch/Packages"    (const getIndex) true
+
+
+    get  "/Packages.xz" (const getIndex) true
 
     -- addRoute "PATCH" "/packages/:arch/:name/:vers" addEntry $
     --         capture "arch"
@@ -219,7 +236,7 @@ routes = do
 -- addEntry :: Arch ::: Name ::: Vers -> Handler
 -- addEntry (a ::: n ::: v) = do
     -- i <- asks appIndex
-    -- m <- catchErrorT $ Index.sync i >> Index.lookup a n v i
+    -- m <- catchError $ Index.sync i >> Index.lookup a n v i
     -- return $
     --     if isJust m
     --         then plain status200 "success\n"
@@ -230,16 +247,16 @@ triggerRebuild = do
     Env{..} <- ask
 
     let Options{..} = appOptions
+        rel         = mkInRelease "origin" "label" "codename" "description"
 
     sayT_ "rebuild" "Rebuilding..."
 
     -- ReadWrite lock for rebuilding index
 
-    -- Write the Packages file incrementally,
-    --   only the Components -> [Arch] needs to be maintained
+    
 
-    catchErrorT $ Index.latest "origin" "label" "codename" "description" appStore
-        >>= Index.write optTemp optWWW
+    catchError $ Index.latest rel appStore
+             >>= Index.generate optTemp optWWW
 
     return $ plain status202 "rebuilding-index\n"
 
@@ -247,6 +264,8 @@ triggerRebuild = do
 
 getIndex :: Handler
 getIndex = undefined
+--    withReadLock
+
     -- i <- asks appIndex
     -- let path = Path.encodeString (Index.path i)
     -- return $ responseFile status200 [] path Nothing

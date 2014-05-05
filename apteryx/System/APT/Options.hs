@@ -15,7 +15,6 @@ module System.APT.Options where
 import           Data.Monoid
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
-import qualified Filesystem.Path.CurrentOS as Path
 import           Options.Applicative
 import           System.APT.Types
 
@@ -26,9 +25,6 @@ parseOptions p = customExecParser
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption = fmap Text.pack . strOption
-
-pathOption :: Mod OptionFields String -> Parser Path
-pathOption = fmap Path.decodeString . strOption
 
 bucketOption :: Mod OptionFields String -> Parser Bucket
 bucketOption = fmap (mk . Text.pack) . strOption

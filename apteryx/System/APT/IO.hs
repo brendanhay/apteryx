@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ViewPatterns               #-}
@@ -27,57 +28,39 @@ import           Control.Monad.IO.Class
 import qualified Crypto.Hash.Conduit        as Crypto
 import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import qualified Filesystem.Path.CurrentOS  as Path
+import           Data.Function
+import           Data.List                  (deleteFirstsBy)
 import           Network.AWS                hiding (async)
 import           System.APT.Types
 import           System.Directory
 import           System.Exit
+import           System.FilePath
 import           System.IO
+import qualified System.IO.Temp             as Temp
 import           System.Posix.Files
 import           System.Process
 
 default (ByteString)
 
-ensureExists :: MonadIO m => Path -> m ()
-ensureExists (Path.encodeString -> dir) = liftIO $ do
-    createDirectoryIfMissing True dir
-    -- Ensure any permission errors are caught.
-    p <- doesDirectoryExist dir
-    unless p $ hPutStrLn stderr (dir ++ " doesnt exist.") >> exitFailure
-
--- getFileSize :: MonadIO m => Path -> EitherT Error m Size
--- getFileSize = catchErrorT
---     . fmap (fromIntegral . fileSize)
---     . getFileStatus
---     . Path.encodeString
-
-getFileStat :: MonadIO m => Path -> m Stat
-getFileStat (Path.encodeString -> path) = liftIO $ Stat
+getFileStat :: MonadIO m => FilePath -> m Stat
+getFileStat path = liftIO $ Stat
     <$> (fromIntegral . fileSize <$> getFileStatus path)
     <*> Crypto.hashFile path
     <*> Crypto.hashFile path
     <*> Crypto.hashFile path
 
-withTempFile :: Path
+withTempFile :: MonadIO m
+             => FilePath
              -> String
-             -> (Path -> Handle -> IO a)
-             -> IO a
-withTempFile dir tmpl f = do
-    (path, hd) <- openTempFile (Path.encodeString dir) tmpl
-    f (Path.decodeString path) hd `finally` (hClose hd >> removeFile path)
-
-withTempFileT :: MonadIO m
-              => Path
-              -> String
-              -> (Path -> Handle -> EitherT Error IO a)
-              -> EitherT Error m a
-withTempFileT dir tmpl f =
-    catchErrorT (withTempFile dir tmpl $ \path hd -> runEitherT (f path hd))
+             -> (FilePath -> Handle -> EitherT Error IO a)
+             -> EitherT Error m a
+withTempFile dir tmpl f =
+    catchError (Temp.withTempFile dir tmpl $ \x -> runEitherT . f x)
         >>= hoistEither
 
 runShell :: MonadIO m => String -> EitherT Error m ByteString
 runShell cmd = do
-    (c, obs, ebs) <- catchErrorT $ createProcess opts >>= run
+    (c, obs, ebs) <- catchError $ createProcess opts >>= run
     case c of
         ExitFailure _ -> left  (shellError $ LBS.toStrict ebs)
         ExitSuccess   -> right (LBS.toStrict obs)
@@ -105,13 +88,51 @@ runShell cmd = do
         , std_err = CreatePipe
         }
 
-loadEnv :: (MonadThrow m, MonadIO m) => Bool -> m AWSEnv
-loadEnv dbg = liftIO $
+discoverAWSEnv :: (MonadThrow m, MonadIO m) => Bool -> m AWSEnv
+discoverAWSEnv dbg = liftIO $
     runEitherT (loadAWSEnv AuthDiscover dbg)
         >>= either (throwM . awsError) return
 
-catchErrorT :: MonadIO m => IO a -> EitherT Error m a
-catchErrorT = EitherT
+catchError :: MonadIO m => IO a -> EitherT Error m a
+catchError = EitherT
     . liftIO
     . liftM (fmapL Exception)
     . (try :: IO a -> IO (Either SomeException a))
+
+diff :: (Functor m, MonadIO m) => FilePath -> FilePath -> m [Path]
+diff !a !b = liftM2 f (listFiles b) (listFiles a)
+  where
+    f xs ys = deleteFirstsBy ((==) `on` relative) xs ys
+
+listFiles :: (MonadIO m, Functor m) => FilePath -> m [Path]
+listFiles !d = foldFiles d
+  where
+    foldFiles !f = do
+        c <- liftIO $ (,,)
+            <$> (readable <$> getPermissions f)
+            <*> doesFileExist f
+            <*> doesDirectoryExist f
+        case c of
+            (True, True, False) ->
+                return [F f (makeRelative d f)]
+            (True, False, True) ->
+                (D f (makeRelative d f) :) . concat <$> foldDir f
+            _                   ->
+                return []
+
+    foldDir f =
+        liftIO (getDirectoryContents f) >>=
+            mapM foldFiles . map (f </>) . filter dots
+
+    dots "."  = False
+    dots ".." = False
+    dots _    = True
+
+removePath :: Path -> IO ()
+removePath p = exist f >>= (`when` rm f)
+  where
+    (exist, rm) = case p of
+        F{} -> (doesFileExist, removeFile)
+        D{} -> (doesDirectoryExist, removeDirectoryRecursive)
+
+    f = absolute p

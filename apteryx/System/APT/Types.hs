@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
 
 -- Module      : System.APT.Types
@@ -22,48 +23,30 @@ module System.APT.Types
     ) where
 
 import           Control.Applicative
-import           Control.Applicative              hiding (optional)
-import           Control.Arrow
 import           Control.DeepSeq
 import           Control.Error
-import           Control.Error
 import           Control.Exception
-import           Control.Monad
-import           Control.Monad.IO.Class
 import           Crypto.Hash
-import           Crypto.Hash
-import           Data.Attoparsec.ByteString.Char8
-import           Data.Attoparsec.ByteString.Char8
+import           Data.Attoparsec.ByteString.Char8 hiding (D)
 import           Data.ByteString                  (ByteString)
-import           Data.ByteString                  (ByteString)
-import qualified Data.ByteString.Base16           as Base16
 import qualified Data.ByteString.Base16           as Base16
 import qualified Data.ByteString.Base64           as Base64
 import           Data.ByteString.Builder          (Builder)
 import qualified Data.ByteString.Builder          as Build
-import qualified Data.ByteString.Builder          as Build
-import qualified Data.ByteString.Char8            as BS
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From
-import           Data.ByteString.From             (FromByteString)
 import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
-import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
-import           Data.Char                        (isAlpha, toUpper)
-import           Data.Conduit
-import qualified Data.Conduit.Binary              as Conduit
+import           Data.Char                        (toUpper)
 import qualified Data.Foldable                    as Fold
 import           Data.Int
 import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
-import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
-import           Data.Monoid
 import           Data.Set                         (Set)
-import qualified Data.Set                         as Set
 import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
 import           Data.Text.Buildable
@@ -72,12 +55,8 @@ import qualified Data.Text.Lazy                   as LText
 import qualified Data.Text.Lazy.Builder           as LBuild
 import           Data.Time
 import           Data.Typeable
-import qualified Filesystem.Path.CurrentOS        as Path
-import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.AWS
-import           Network.HTTP.Types.Header
 import           Network.HTTP.Types.Status
-import           System.IO                        (hClose)
 import           System.Locale
 import           System.Logger.Message            (ToBytes(..))
 
@@ -109,8 +88,6 @@ instance ToURL Text where
         f c | c == '+'  = "%2B"
             | c == ' '  = "%20"
             | otherwise = LBuild.singleton c
-
-type Path = Path.FilePath
 
 data Error where
     Exception :: SomeException -> Error
@@ -192,7 +169,7 @@ instance FromByteString Vers where
     parser = do
         bs <- takeWhile1 (/= '_')
         Vers bs <$> either
-            (fail "Unable to parse numeric version components") return
+            (fail "Unable to parse numeric version") return
             (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
 
 data Arch
@@ -222,7 +199,7 @@ instance FromByteString Arch where
          <|> (string "i386"  >> return I386)
 
 newtype Size = Size { unSize :: Int64 }
-    deriving (Eq, Ord, Show, Num)
+    deriving (Eq, Ord, Show, Enum, Real, Num, Integral)
 
 instance ToBytes Size where
     bytes = Build.int64Dec . unSize
@@ -236,12 +213,7 @@ data Stat = Stat
 
 instance NFData Stat
 
-data Meta = Meta
-    { metaComps :: [ByteString]
-    , metaOther :: Map (CI ByteString) ByteString
-    } deriving (Eq, Ord, Show)
-
-instance NFData Meta
+type Meta = Map (CI ByteString) ByteString
 
 type Object  = Entry Key
 type Package = Entry (Stat, Meta)
@@ -260,9 +232,6 @@ stat = fst . entAnn
 
 meta :: Package -> Meta
 meta = snd . entAnn
-
-comps :: Package -> [Text]
-comps = map Text.decodeUtf8 . metaComps . meta
 
 annotate :: Stat -> Meta -> Entry a -> Package
 annotate s m o = o { entAnn = (s, m) }
@@ -291,7 +260,7 @@ instance ToBytes Package where
         , "MD5sum: "       =@ base16 statMD5 -- Explicitly lowercase s in MD5sum.
         , "SHA1: "         =@ base16 statSHA1
         , "SHA256: "       =@ base16 statSHA256
-        ] ++ map (Build.byteString . line) (Map.toList . metaOther $ meta p)
+        ] ++ map (Build.byteString . line) (Map.toList $ meta p)
       where
         Stat{..} = stat p
 
@@ -302,51 +271,72 @@ instance ToBytes Package where
             | otherwise                   = k
 
 data Index = Index
-    { idxRel  :: !Path
+    { idxRel  :: !FilePath
     , idxStat :: !Stat
     } deriving (Eq, Show)
 
 instance NFData Index
 
 instance ToBytes [Index] where
-    bytes ids =
+    bytes xs =
            csum "MD5Sum:\n" statMD5
         <> csum "SHA1:\n"   statSHA1
         <> csum "SHA256:\n" statSHA256
       where
         csum :: Builder -> (Stat -> Digest a) -> Builder
-        csum k f = mappend k $ Fold.foldMap (line f) ids
+        csum k f = mappend k $ Fold.foldMap (line f) xs
+
+        line :: (Stat -> Digest a) -> Index -> Builder
         line f x = mconcat
             [ " " =@ base16 (f $ idxStat x)
-            , " " =@ statSize (idxStat x)
-            , " " =@ Path.encode (idxRel x)
+            , pad =@ size
+            , " " =@ idxRel x
             , "\n"
             ]
+          where
+            pad  = bytes (replicate (1 + (maxl - len size)) ' ')
+            size = statSize (idxStat x)
 
-data Control = Control
-    { ctlOrigin :: !Text
-    , ctlLabel  :: !Text
-    , ctlComp   :: !Text
-    , ctlArch   :: !Arch
-    } deriving (Eq, Show)
+        maxl = len . Fold.maximum $ map (statSize . idxStat) xs
+        len  = truncate . (/ base) . log . fromIntegral
 
-instance ToBytes Control where
-    bytes Control{..} = joinLines
-        [ "Origin: "       =@ ctlOrigin
-        , "Label: "        =@ ctlLabel
-        , "Component: "    =@ ctlComp
-        , "Architecture: " =@ ctlArch
+        base :: Double
+        base = log 10
+
+data Release = Release !Text !Text !Arch
+    deriving (Eq, Show)
+
+instance ToBytes Release where
+    bytes (Release org lbl arch) = joinLines
+        [ "Origin: "       =@ org
+        , "Label: "        =@ lbl
+        , "Architecture: " =@ arch
         ]
 
 data InRelease = InRelease
     { relOrigin :: !Text
     , relLabel  :: !Text
     , relCode   :: !Text
+    , relDesc   :: !Text
     , relDate   :: !UTCTime
     , relUntil  :: !UTCTime
-    , relDesc   :: !Text
-    , relPkgs   :: Map Text (Map Arch (Set Package))
+    , relPkgs   :: Map Arch (Set Package)
     } deriving (Eq, Show)
+
+mkInRelease :: Text
+            -> Text
+            -> Text
+            -> Text
+            -> (UTCTime -> Map Arch (Set Package) -> InRelease)
+mkInRelease org lbl code desc = \t ps -> InRelease
+    { relOrigin = org
+    , relLabel  = lbl
+    , relCode   = code
+    , relDesc   = desc
+    , relDate   = t
+    , relUntil  = (60 * 60) `addUTCTime` t
+    , relPkgs   = ps
+    }
 
 instance ToBytes InRelease where
     bytes InRelease{..} = joinLines $
@@ -355,10 +345,22 @@ instance ToBytes InRelease where
         , "Codename: "      =@ relCode
         , "Date: "          =@ time relDate
         , "Valid-Until: "   =@ time relUntil
-        , "Components: "    =@ Text.intercalate " " (Map.keys relPkgs)
-        , "Architectures: " =@ concatMap Map.keys (Map.elems relPkgs)
+        , "Architectures: " =@ Map.keys relPkgs
         , "Description: "   =@ relDesc
         ]
+
+data Path
+    = F !FilePath !FilePath
+    | D !FilePath !FilePath
+      deriving (Eq, Show)
+
+absolute :: Path -> FilePath
+absolute (F a _) = a
+absolute (D a _) = a
+
+relative :: Path -> FilePath
+relative (F _ r) = r
+relative (D _ r) = r
 
 (=@) :: ToBytes a => Builder -> a -> Builder
 (=@) k = mappend k . bytes

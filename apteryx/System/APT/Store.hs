@@ -44,7 +44,6 @@ import           Data.Ord
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Data.Text.Encoding        as Text
-import qualified Filesystem.Path.CurrentOS as Path
 import           Network.AWS.S3            hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import qualified System.APT.Package        as Pkg
@@ -95,8 +94,8 @@ new :: Bucket -> Int -> AWSEnv -> Store
 new = Store
 
 -- | Given a package description and contents, upload the file to S3.
-add :: MonadIO m => Package -> Path -> Store -> m ()
-add p (Path.encodeString -> path) s = aws s $
+add :: MonadIO m => Package -> FilePath -> Store -> m ()
+add p path s = aws s $
     send_ PutObject
         { poBucket  = bucketName s
         , poKey     = objectKey p s

@@ -32,20 +32,16 @@ import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Base16           as Base16
-import           Data.ByteString.Builder          (Builder)
-import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From             (FromByteString)
 import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
-import           Data.Char                        (isAlpha, toUpper)
+import           Data.Char                        (isAlpha)
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
-import qualified Data.Foldable                    as Fold
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
-import qualified Filesystem.Path.CurrentOS        as Path
 import           Network.HTTP.Types.Header
 import           System.APT.IO
 import           System.APT.Types
@@ -90,10 +86,8 @@ fromMap fs = do
         <*> require "version" fs
         <*> require "architecture" fs
         <*> pure ()
-    return $ \st -> annotate st (Meta comps fields) e
+    return $ \st -> annotate st fields e
   where
-    comps = fromMaybe ["main"] $ BS.words <$> Map.lookup "components" fs
-
     fields = Map.map (BS.take 1024)
         $ Map.filterWithKey (const . (`elem` optional)) fs
 
@@ -112,14 +106,12 @@ fromMap fs = do
         ]
 
 fromFile :: MonadIO m
-         => Path
+         => FilePath
          -> Source IO ByteString
          -> EitherT Error m Package
-fromFile tmp src = withTempFileT tmp ".deb" $ \path hd -> do
-    catchErrorT $ (src $$ Conduit.sinkHandle hd) >> hClose hd
-    bs <- runShell $ "ar -p "
-         ++ Path.encodeString path
-         ++ " control.tar.gz | tar -Ox control"
+fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
+    catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
+    bs <- runShell $ "ar -p " ++ path ++ " control.tar.gz | tar -Ox control"
     hoistEither (fields bs >>= fromMap) `ap` getFileStat path
   where
     fields = field (Map.fromList . map (first CI.mk)) parser

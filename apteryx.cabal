@@ -57,13 +57,15 @@ library
         , directory
         , errors
         , exceptions
+        , filepath
         , http-conduit
         , http-types
         , mmorph
+        , monad-par
+        , monad-par-extras
         , old-locale
         , optparse-applicative
         , process
-        , system-filepath
         , temporary
         , text
         , text-format
@@ -71,9 +73,6 @@ library
         , tinylog              >= 0.7.2
         , transformers
         , unix
-
-        , monad-par
-        , monad-par-extras
 
 -- executable apteryx-build
 --     main-is:            Main.hs
@@ -112,7 +111,6 @@ library
 --         , either
 --         , exceptions
 --         , optparse-applicative
---         , system-filepath
 
 executable apteryx-server
     main-is:            Main.hs
