@@ -84,10 +84,7 @@ generate tmp dest r@InRelease{..} =
 
         createDirectoryIfMissing True dest
 
-        rms <- diff path dest
-
-        forM_ rms $ \p ->
-            putStrLn ("Removing " ++ absolute p) *> removePath p
+        diff path dest >>= mapM_ removePath
 
         -- FIXME: in haskell
         void $ rawSystem "cp" ["-rf", path ++ "/", dest ++ "/"]
