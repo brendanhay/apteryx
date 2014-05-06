@@ -27,6 +27,7 @@ import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
+import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
@@ -221,24 +222,38 @@ serve o@Options{..} = do
 
 routes :: Routes a (EitherT Error App) ()
 routes = do
-    post "/packages" (const triggerRebuild) true
+    post  "/packages" (const triggerRebuild) true
 
-    get  "/packages/:arch/:name/:vers" getPackage $
-            capture "arch"
+    get   "/packages/:arch/:name/:vers" getPackage
+         $  capture "arch"
         .&. capture "name"
         .&. capture "vers"
 
-    patch "/packages/:arch/:name/:vers" addPackage $
-            capture "arch"
+    patch "/packages/:arch/:name/:vers" addPackage
+         $  capture "arch"
         .&. capture "name"
         .&. capture "vers"
 
-    get  "/InRelease" (const $ getIndex "InRelease") true
-    get  "/Release"   (const $ getIndex "Release") true
+   -- Enforce the dist = the distro/codename supplied to the cmdline options?
+   -- Or template the Release files? What about signing?
 
-    get  "/:arch/Packages"    (getArch "Packages")    $ capture "arch"
-    get  "/:arch/Packages.gz" (getArch "Packages.gz") $ capture "arch"
-    get  "/:arch/Release"     (getArch "Release")     $ capture "arch"
+    get "/dists/:dist/InRelease" (getIndex "InRelease")
+         $ capture "dist"
+
+    get "/dists/:dist/Release" (getIndex "Release")
+         $ capture "dist"
+
+    get "/dists/:dist/:arch/Packages" (getArch "Packages")
+         $  capture "dist"
+        .&. capture "arch"
+
+    get "/dists/:dist/:arch/Packages.gz" (getArch "Packages.gz")
+         $  capture "dist"
+        .&. capture "arch"
+
+    get "/dists/:dist/:arch/Release" (getArch "Release")
+         $  capture "dist"
+        .&. capture "arch"
 
     get  "/i/status" (const $ return blank) true
     head "/i/status" (const $ return blank) true
@@ -295,16 +310,16 @@ triggerRebuild =
                   return True)
               m
 
-getArch :: FilePath -> Arch -> Handler
-getArch f a = getIndex ("binary-" ++ show a </> f)
-
-getIndex :: FilePath -> Handler
-getIndex f = do
+getIndex :: FilePath -> ByteString -> Handler
+getIndex f _ = do
     path <- (</> f) <$> asks (optWWW . appOptions)
-    p    <- catchError (doesFileExist f)
+    p    <- catchError (doesFileExist path)
     return $ if p
        then responseFile status200 [] path Nothing
        else plain status404 "not-found\n"
+
+getArch :: FilePath -> ByteString ::: Arch -> Handler
+getArch f (d ::: a) = getIndex ("binary-" ++ show a </> f) d
 
 blank :: Response
 blank = plain status200 ""
@@ -331,7 +346,7 @@ onError e = case statusCode code of
 logRequest :: Logger -> Middleware
 logRequest l app rq = do
     rs <- app rq
-    Log.debug l . msg $ " \""
+    Log.debug l . msg $ '"'
         +++ requestMethod rq
         +++ ' '
         +++ rawPathInfo rq
