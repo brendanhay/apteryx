@@ -176,9 +176,12 @@ data Arch
     = Other
     | Amd64
     | I386
-      deriving (Eq, Ord, Show)
+      deriving (Eq, Ord)
 
 instance NFData Arch
+
+instance Show Arch where
+    show = LBS.unpack . Build.toLazyByteString . bytes
 
 instance ToBytes Arch where
     bytes Other = "all"

@@ -127,11 +127,14 @@ executable apteryx-server
           apteryx
         , base
         , bytestring
+        , directory
         , either
         , exceptions
+        , filepath
         , http-types
         , mtl
         , optparse-applicative
+        , time
         , tinylog
         , transformers
         , wai

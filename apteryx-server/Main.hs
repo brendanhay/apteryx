@@ -32,6 +32,8 @@ import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
+import           Data.Time.Clock
+import           Data.Time.Clock.POSIX
 import           Data.Word
 import           Network.HTTP.Types
 import           Network.Wai
@@ -48,6 +50,8 @@ import           System.APT.Options
 import           System.APT.Store            (Store)
 import qualified System.APT.Store            as Store
 import           System.APT.Types
+import           System.Directory
+import           System.FilePath
 import qualified System.Logger               as Log
 import           System.LoggerT              hiding (Error)
 
@@ -140,7 +144,7 @@ data Env = Env
 newEnv :: Options -> IO Env
 newEnv o@Options{..} = Env o
     <$> (Store.new optKey optVersions <$> discoverAWSEnv optDebug)
-    <*> newLogger
+    <*> pure getLogger
     <*> newMVar ()
 
 closeEnv :: Env -> IO ()
@@ -217,47 +221,73 @@ serve o@Options{..} = do
 
 routes :: Routes a (EitherT Error App) ()
 routes = do
-    get  "/i/status"    (const $ return blank) true
-    head "/i/status"    (const $ return blank) true
+    post "/packages" (const triggerRebuild) true
 
-    post "/packages"    (const triggerRebuild) true
+    get  "/packages/:arch/:name/:vers" getPackage $
+            capture "arch"
+        .&. capture "name"
+        .&. capture "vers"
 
-    get  "binary-:arch/Packages"    (const getIndex) true
+    patch "/packages/:arch/:name/:vers" addPackage $
+            capture "arch"
+        .&. capture "name"
+        .&. capture "vers"
 
+    get  "/InRelease" (const $ getIndex "InRelease") true
+    get  "/Release"   (const $ getIndex "Release") true
 
-    get  "/Packages.xz" (const getIndex) true
+    get  "/:arch/Packages"    (getArch "Packages")    $ capture "arch"
+    get  "/:arch/Packages.gz" (getArch "Packages.gz") $ capture "arch"
+    get  "/:arch/Release"     (getArch "Release")     $ capture "arch"
 
-    -- addRoute "PATCH" "/packages/:arch/:name/:vers" addEntry $
-    --         capture "arch"
-    --     .&. capture "name"
-    --     .&. capture "vers"
+    get  "/i/status" (const $ return blank) true
+    head "/i/status" (const $ return blank) true
 
--- addEntry :: Arch ::: Name ::: Vers -> Handler
--- addEntry (a ::: n ::: v) = do
-    -- i <- asks appIndex
-    -- m <- catchError $ Index.sync i >> Index.lookup a n v i
-    -- return $
-    --     if isJust m
-    --         then plain status200 "success\n"
-    --         else plain status404 "not-found\n"
+getPackage :: Arch ::: Name ::: Vers -> Handler
+getPackage (a ::: n ::: v) = do
+    Options{..} <- asks appOptions
+
+    s <- asks appStore
+    t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
+    u <- Store.presign (Entry n v a ()) t s
+
+    return $! responseLBS status302 [("Location", u)] mempty
+
+addPackage :: Arch ::: Name ::: Vers -> Handler
+addPackage (a ::: n ::: v) = do
+    s <- asks appStore
+    let x' = Entry n v a ()
+        x  = Store.objectKey x' s
+    sayT name "Searching for {}" [x]
+    Store.metadata x' s >>= respond x . isJust
+  where
+    respond x True = do
+        sayT name "Found package {}, rebuilding local index" [x]
+        ask >>= \e -> catchError . withMVar (appLock e) $ const (sync e)
+        sayT name "Index rebuild complete after adding {}" [x]
+        return $ plain status200 "index-rebuilt\n"
+
+    respond x False = do
+        sayT name "Unable to find package {}" [x]
+        return $ plain status404 "not-found\n"
+
+    name = "add-package"
 
 triggerRebuild :: Handler
-triggerRebuild = do
-    Env{..} <- ask
-
-    let o@Options{..} = appOptions
-
-    p <- catchError . sync appLock $
-        Index.latest (spec o) appStore >>= Index.generate optTemp optWWW
-
-    respond $ if p
-       then ("Triggering rebuild...", status202, "triggered-rebuild\n")
-       else ("In progress.", status200, "rebuild-in-progress\n")
-
+triggerRebuild =
+    ask >>= \e -> catchError (lock (appLock e) (sync e)) >>= respond
   where
-    respond (m, st, r) = sayT_ "rebuild" m >> return (plain st r)
+    respond True = do
+        sayT_ name "Triggering local index rebuild"
+        return $ plain status202 "triggered-rebuild\n"
 
-    sync l f = do
+    respond False = do
+        sayT_ name "Rebuild already in progress"
+        return $ plain status200 "rebuild-in-progress\n"
+
+    name = "rebuild"
+
+    lock l f = do
         m <- tryTakeMVar l
         maybe (return False)
               (\v -> do
@@ -265,19 +295,27 @@ triggerRebuild = do
                   return True)
               m
 
-getIndex :: Handler
-getIndex = undefined
---    withReadLock
+getArch :: FilePath -> Arch -> Handler
+getArch f a = getIndex ("binary-" ++ show a </> f)
 
-    -- i <- asks appIndex
-    -- let path = Path.encodeString (Index.path i)
-    -- return $ responseFile status200 [] path Nothing
+getIndex :: FilePath -> Handler
+getIndex f = do
+    path <- (</> f) <$> asks (optWWW . appOptions)
+    p    <- catchError (doesFileExist f)
+    return $ if p
+       then responseFile status200 [] path Nothing
+       else plain status404 "not-found\n"
+
+blank :: Response
+blank = plain status200 ""
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
 
-blank :: Response
-blank = plain status200 ""
+sync :: Env -> IO ()
+sync Env{..} =
+    Index.latest (spec appOptions) appStore
+        >>= Index.generate (optTemp appOptions) (optWWW appOptions)
 
 onError :: Error -> App Response
 onError e = case statusCode code of
@@ -293,15 +331,16 @@ onError e = case statusCode code of
 logRequest :: Logger -> Middleware
 logRequest l app rq = do
     rs <- app rq
-    Log.debug l . msg $ requestMethod rq
+    Log.debug l . msg $ " \""
+        +++ requestMethod rq
         +++ ' '
         +++ rawPathInfo rq
         +++ rawQueryString rq
         +++ ' '
         +++ show (httpVersion rq)
-        +++ " ["
+        +++ "\" "
         +++ statusCode (responseStatus rs)
-        +++ "] \""
+        +++ " \""
         +++ fromMaybe mempty (lookup "user-agent" $ requestHeaders rq)
         +++ "\" \""
         +++ fromMaybe mempty (lookup "referer" $ requestHeaders rq)

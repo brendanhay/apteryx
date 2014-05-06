@@ -56,9 +56,7 @@ default (Builder)
 latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
        -> Store
        -> IO InRelease
-latest ctor s = ctor
-    <$> getCurrentTime
-    <*> (Store.entries s >>= parallel)
+latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= parallel)
   where
     parallel = fmap (Map.unionsWith (<>))
         . runParIO

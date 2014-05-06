@@ -14,6 +14,7 @@
 module System.APT.Log
     ( Logger
     , newLogger
+    , getLogger
 
     , err_
     , say_
@@ -38,21 +39,21 @@ import qualified System.LoggerT          as LogT
 newLogger :: IO Logger
 newLogger = new $ defSettings { bufSize = 0 }
 
+getLogger :: Logger
+getLogger = Unsafe.unsafePerformIO newLogger
+{-# NOINLINE getLogger #-}
+
 err_ :: (MonadIO m, ToBytes a, ToBytes b) => a -> b -> m ()
-err_ lbl = err logger . field (toByteString lbl)
+err_ lbl = err getLogger . field (toByteString lbl)
 
 say_ :: (MonadIO m, ToBytes a, ToBytes b) => a -> b -> m ()
-say_ lbl = info logger . field (toByteString lbl)
+say_ lbl = info getLogger . field (toByteString lbl)
 
 say :: (MonadIO m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
-say lbl fmt ps = info logger . field (toByteString lbl) $ Text.format fmt ps
+say lbl fmt ps = info getLogger . field (toByteString lbl) $ Text.format fmt ps
 
 sayT_ :: (MonadLogger m, ToBytes a, ToBytes b) => a -> b -> m ()
 sayT_ lbl = LogT.info . field (toByteString lbl)
 
 sayT :: (MonadLogger m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
 sayT lbl fmt ps = LogT.info . field (toByteString lbl) $ Text.format fmt ps
-
-logger :: Logger
-logger = Unsafe.unsafePerformIO newLogger
-{-# NOINLINE logger #-}

@@ -23,6 +23,9 @@ module System.APT.Store
     , copy
     , entries
     , metadata
+    , presign
+
+    , objectKey
     ) where
 
 import           Control.Applicative
@@ -44,8 +47,10 @@ import           Data.Ord
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Data.Text.Encoding        as Text
+import           Data.Time
 import           Network.AWS.S3            hiding (Bucket, Source)
 import           Network.HTTP.Conduit
+import           Network.HTTP.Types.Method
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
@@ -59,29 +64,6 @@ import           System.APT.Types
 --     +-[components]
 --       +-package-name
 --         +-*.deb
-
-class Keyed a where
-    objectKey :: Entry a -> Store -> Text
-    objectKey Entry{..} = bucketPrefix ("pool/" <> urlEncode path)
-      where
-        path = Key $ Text.concat
-            [ name
-            , "/"
-            , name
-            , "_"
-            , Text.decodeUtf8 (verRaw entVers)
-            , "_"
-            , Text.decodeUtf8 (toByteString entArch)
-            , ".deb"
-            ]
-
-        name = Text.decodeUtf8 (unName entName)
-
-instance Keyed ()
-instance Keyed (Stat, Meta)
-
-instance Keyed Key where
-    objectKey = const . urlEncode
 
 data Store = Store
     { _bucket   :: !Bucket
@@ -175,6 +157,12 @@ entries s = aws s $ paginate start
         . sortBy (compare `on` (Down . entVers))
         . mappend xs
 
+presign :: (MonadIO m, Keyed a) => Entry a -> UTCTime -> Store -> m ByteString
+presign e t s = aws s $ presignS3 GET bkt key t
+  where
+    bkt = Text.encodeUtf8 $ bucketName s
+    key = Text.encodeUtf8 $ objectKey e s
+
 -- | Run an AWS action using the store's environment.
 -- FIXME: proper error handling
 aws :: MonadIO m => Store -> AWS a -> m a
@@ -188,3 +176,26 @@ bucketPrefix t s = strip prefix <> "/" <> strip t
   where
     prefix  = fromMaybe "" . bktPrefix $ _bucket s
     strip x = fromMaybe x $ "/" `Text.stripSuffix` x
+
+class Keyed a where
+    objectKey :: Entry a -> Store -> Text
+    objectKey Entry{..} = bucketPrefix ("pool/" <> urlEncode path)
+      where
+        path = Key $ Text.concat
+            [ name
+            , "/"
+            , name
+            , "_"
+            , Text.decodeUtf8 (verRaw entVers)
+            , "_"
+            , Text.decodeUtf8 (toByteString entArch)
+            , ".deb"
+            ]
+
+        name = Text.decodeUtf8 (unName entName)
+
+instance Keyed ()
+instance Keyed (Stat, Meta)
+
+instance Keyed Key where
+    objectKey = const . urlEncode
