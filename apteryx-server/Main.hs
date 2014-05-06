@@ -209,7 +209,6 @@ serve o@Options{..} = do
         . setBeforeMainLoop (logStart $ appLogger e)
         . setOnException (logException $ appLogger e)
         . setOnExceptionResponse (const serverError)
-        . setTimeout 60
         $ defaultSettings
 
     logStart l =
