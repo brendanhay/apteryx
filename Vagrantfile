@@ -15,14 +15,23 @@ Vagrant.configure('2') do |config|
 end
 
 $bootstrap = <<-SCRIPT
-# updated=~/.apt-updated
-
-if [ ! -f $updated ]; then apt-get update && touch $updated; fi
-if [ ! -f $upgraded ]; then apt-get upgrade && touch $upgrade; fi
+apt-get update
+apt-get upgrade
 
 apt-get install -y \
  build-essential \
  man \
  git-core \
- zlib1g-dev
+ zlib1g-dev \
+ alex \
+ happy \
+ ghc \
+ cabal-install
+
+su - vagrant -c "
+echo 'export PATH=~/.cabal/bin:$PATH' >> ~/.bashrc
+cabal update
+cabal install cabal-install
+cd /home/vagrant/apteryx && make
+"
 SCRIPT

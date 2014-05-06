@@ -42,7 +42,7 @@ import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
-import           Prelude                     hiding (concatMap, head)
+import           Prelude                     hiding (concatMap, head, log)
 import           System.APT.IO
 import qualified System.APT.Index            as Index
 import           System.APT.Log
@@ -53,7 +53,7 @@ import           System.APT.Types
 import           System.Directory
 import           System.FilePath
 import qualified System.Logger               as Log
-import           System.LoggerT              hiding (Error)
+import           System.Logger.Class         hiding (Error)
 
 default (Builder)
 
@@ -164,11 +164,12 @@ runApp :: Env -> App a -> IO a
 runApp e = (`runReaderT` e) . unApp
 
 instance MonadLogger App where
-    logger = asks appLogger
+    log l f = do
+        g <- asks appLogger
+        Log.log g l f
 
 instance MonadLogger (EitherT e App) where
-    logger = lift logger
-    prefix = lift prefix
+    log l f = lift (log l f)
 
 instance MonadThrow (EitherT e App) where
     throwM = lift . throwM

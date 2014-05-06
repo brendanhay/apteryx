@@ -85,7 +85,7 @@ generate tmp dest r@InRelease{..} =
         diff path dest >>= mapM_ removePath
 
         -- FIXME: in haskell
-        void $ rawSystem "cp" ["-rf", path ++ "/", dest ++ "/"]
+        void $ system "mv " $ ++ path ++ "/* " ++ dest ++ "/"
   where
     release base (arch, ps) = liftIO $ do
         let dir  = base ++ BS.unpack ("/binary-" <> toByteString arch)

@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 FLAGS := --disable-documentation --disable-library-coverage
-DEPS  := vendor/amazonka vendor/tinylog
+DEPS  := vendor/amazonka
 
 .PHONY: build clean test lint
 
@@ -30,9 +30,6 @@ add-sources: cabal.sandbox.config $(DEPS)
 
 cabal.sandbox.config:
 	cabal sandbox init
-
-vendor/tinylog:
-	git clone https://github.com/twittner/tinylog.git $@
 
 vendor/%:
 	git clone https://github.com/brendanhay/$*.git $@

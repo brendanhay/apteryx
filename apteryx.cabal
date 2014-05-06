@@ -70,7 +70,7 @@ library
         , text
         , text-format
         , time
-        , tinylog              >= 0.7.2
+        , tinylog              >= 0.8
         , transformers
         , unix
 

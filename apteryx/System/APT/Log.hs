@@ -33,8 +33,8 @@ import           Data.Text.Format.Params (Params)
 import           System.APT.Types
 import qualified System.IO.Unsafe        as Unsafe
 import           System.Logger
-import           System.LoggerT          (MonadLogger)
-import qualified System.LoggerT          as LogT
+import           System.Logger.Class     (MonadLogger)
+import qualified System.Logger.Class     as Log
 
 newLogger :: IO Logger
 newLogger = new $ defSettings { bufSize = 0 }
@@ -53,7 +53,7 @@ say :: (MonadIO m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
 say lbl fmt ps = info getLogger . field (toByteString lbl) $ Text.format fmt ps
 
 sayT_ :: (MonadLogger m, ToBytes a, ToBytes b) => a -> b -> m ()
-sayT_ lbl = LogT.info . field (toByteString lbl)
+sayT_ lbl = Log.info . field (toByteString lbl)
 
 sayT :: (MonadLogger m, ToBytes a, Params ps) => a -> Format -> ps -> m ()
-sayT lbl fmt ps = LogT.info . field (toByteString lbl) $ Text.format fmt ps
+sayT lbl fmt ps = Log.info . field (toByteString lbl) $ Text.format fmt ps
