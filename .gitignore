@@ -19,6 +19,7 @@ cabal.sandbox.config
 /log
 /vendor
 /www
+/.vagrant
 
 # CTAGS
 TAGS
@@ -46,6 +47,6 @@ tags
 .metadata
 
 # Links
-upload
-build
-server
+/upload
+/build
+/server
