@@ -45,7 +45,7 @@ import           Data.Int
 import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
-import           Data.Monoid
+import           Data.Monoid                      hiding (All)
 import           Data.Set                         (Set)
 import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
@@ -57,6 +57,7 @@ import           Data.Time
 import           Data.Typeable
 import           Network.AWS
 import           Network.HTTP.Types.Status
+import           Prelude                          hiding (all)
 import           System.Locale
 import           System.Logger.Message            (ToBytes(..))
 
@@ -173,7 +174,7 @@ instance FromByteString Vers where
             (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
 
 data Arch
-    = Other
+    = All
     | Amd64
     | I386
       deriving (Eq, Ord)
@@ -184,7 +185,7 @@ instance Show Arch where
     show = LBS.unpack . Build.toLazyByteString . bytes
 
 instance ToBytes Arch where
-    bytes Other = "all"
+    bytes All = "all"
     bytes Amd64 = "amd64"
     bytes I386  = "i386"
 
@@ -192,14 +193,16 @@ instance ToBytes [Arch] where
     bytes = mconcat . intersperse " " . map bytes
 
 instance Buildable Arch where
-    build Other = "all"
+    build All = "all"
     build Amd64 = "amd64"
     build I386  = "i386"
 
 instance FromByteString Arch where
-    parser = (string "all"   >> return Other)
-         <|> (string "amd64" >> return Amd64)
-         <|> (string "i386"  >> return I386)
+    parser = optional (string "binary-") >> all <|> amd64 <|> i386
+      where
+        all   = string "all"   >> return All
+        amd64 = string "amd64" >> return Amd64
+        i386  = string "i386"  >> return I386
 
 newtype Size = Size { unSize :: Int64 }
     deriving (Eq, Ord, Show, Enum, Real, Num, Integral)
@@ -236,11 +239,11 @@ stat = fst . entAnn
 meta :: Package -> Meta
 meta = snd . entAnn
 
+mkEntry :: Name -> Vers -> Arch -> Entry ()
+mkEntry n v a = Entry n v a ()
+
 annotate :: Stat -> Meta -> Entry a -> Package
 annotate s m o = o { entAnn = (s, m) }
-
-instance ToURL Object where
-    urlEncode = urlEncode . entAnn
 
 instance FromByteString Object where
     parser = do

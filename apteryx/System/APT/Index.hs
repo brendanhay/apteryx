@@ -72,13 +72,10 @@ generate tmp dest r@InRelease{..} =
         ids <- runParIO $ parMapM (release path) (Map.toList relPkgs)
 
         let rel = path ++ "/Release"
-            inr = path ++ "/InRelease"
 
         writef rel $ \hd -> do
             hPutBuilder hd (bytes r)
             hPutBuilder hd (bytes $ concat ids)
-
-        copyFile rel inr
 
         createDirectoryIfMissing True dest
 

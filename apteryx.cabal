@@ -131,6 +131,8 @@ executable apteryx-server
         , either
         , exceptions
         , filepath
+        , http-conduit
+        , http-reverse-proxy
         , http-types
         , mtl
         , optparse-applicative

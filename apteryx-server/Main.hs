@@ -29,6 +29,7 @@ import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
 import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder
+import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
 import           Data.Monoid
@@ -36,6 +37,8 @@ import           Data.String
 import           Data.Time.Clock
 import           Data.Time.Clock.POSIX
 import           Data.Word
+import qualified Network.HTTP.Conduit        as HTTP
+import           Network.HTTP.ReverseProxy
 import           Network.HTTP.Types
 import           Network.Wai
 import           Network.Wai.Handler.Warp
@@ -139,6 +142,7 @@ data Env = Env
     { appOptions :: !Options
     , appStore   :: !Store
     , appLogger  :: !Logger
+    , appManager :: !HTTP.Manager
     , appLock    :: MVar ()
     }
 
@@ -146,6 +150,7 @@ newEnv :: Options -> IO Env
 newEnv o@Options{..} = Env o
     <$> (Store.new optKey optVersions <$> discoverAWSEnv optDebug)
     <*> pure getLogger
+    <*> HTTP.newManager HTTP.conduitManagerSettings
     <*> newMVar ()
 
 closeEnv :: Env -> IO ()
@@ -228,14 +233,18 @@ routes = do
          $  capture "arch"
         .&. capture "name"
         .&. capture "vers"
+        .&. request
 
-    patch "/packages/:arch/:name/:vers" addPackage
-         $  capture "arch"
-        .&. capture "name"
-        .&. capture "vers"
+    -- patch "/packages/:arch/:name/:vers" addPackage
+    --      $  capture "arch"
+    --     .&. capture "name"
+    --     .&. capture "vers"
 
-   -- Enforce the dist = the distro/codename supplied to the cmdline options?
-   -- Or template the Release files? What about signing?
+    -- All shouldn't appear in the main arch
+    -- packages with arch all should appear in every release indicie
+    -- dist should match whatever the server started with (list?)
+
+   -- Enforce the dist = the distro/codename supplied to the cmdline options
 
     get "/dists/:dist/InRelease" (getIndex "InRelease")
          $ capture "dist"
@@ -243,35 +252,49 @@ routes = do
     get "/dists/:dist/Release" (getIndex "Release")
          $ capture "dist"
 
-    get "/dists/:dist/:arch/Packages" (getArch "Packages")
+    get "/dists/:dist/s3/:arch/Packages" (getArch "Packages")
          $  capture "dist"
         .&. capture "arch"
 
-    get "/dists/:dist/:arch/Packages.gz" (getArch "Packages.gz")
+    get "/dists/:dist/s3/:arch/Packages.gz" (getArch "Packages.gz")
          $  capture "dist"
         .&. capture "arch"
 
-    get "/dists/:dist/:arch/Release" (getArch "Release")
+    get "/dists/:dist/s3/:arch/Release" (getArch "Release")
          $  capture "dist"
         .&. capture "arch"
 
     get  "/i/status" (const $ return blank) true
     head "/i/status" (const $ return blank) true
 
-getPackage :: Arch ::: Name ::: Vers -> Handler
-getPackage (a ::: n ::: v) = do
-    Options{..} <- asks appOptions
+getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
+getPackage (a ::: n ::: v ::: rq) = do
+    Env{..} <- ask
 
-    s <- asks appStore
     t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
-    u <- Store.presign (Entry n v a ()) t s
+    u <- Store.presign (Entry n v a ()) t appStore
 
-    return $! responseLBS status302 [("Location", u)] mempty
+    let (host, url)   = BS.break (== '/') (BS.drop 8 u)
+        (path, query) = BS.break (== '?') url
+
+    let f = WPRModifiedRequest
+              (defaultRequest
+                   { requestMethod  = "GET"
+                   , rawPathInfo    = path
+                   , requestHeaders = []
+                   , isSecure       = True
+                   , rawQueryString = BS.drop 1 query
+                   })
+              (ProxyDest host 443)
+
+    sayT "proxy" "{}{}{}" $ map BS.unpack [host, path, query]
+
+    liftIO $ waiProxyTo (return . const f) defaultOnExc appManager rq
 
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
     s <- asks appStore
-    let x' = Entry n v a ()
+    let x' = mkEntry n v a
         x  = Store.objectKey x' s
     sayT name "Searching for {}" [x]
     Store.metadata x' s >>= respond x . isJust
