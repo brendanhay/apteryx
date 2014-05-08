@@ -14,18 +14,20 @@
 -- Portability : non-portable (GHC extensions)
 
 module System.APT.Index
-    ( latest
-    , generate
+    (
+    -- * S3 Sync
+      sync
 
+    -- * HTTP Triggers
     , rebuild
     , reindex
     ) where
 
 import           Control.Applicative
+import           Control.Error
+import           Control.Exception         (throwIO)
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Control.Monad.Par.Combinator
-import           Control.Monad.Par.IO
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8     as BS
 import           Data.Conduit
@@ -46,12 +48,26 @@ import           System.APT.Store          (Store)
 import qualified System.APT.Store          as Store
 import           System.APT.Types
 import           System.Directory
+import           System.Exit
 import           System.IO
 import           System.IO.Temp
 import           System.Logger.Message     ((+++))
 import           System.Process
 
 default (Builder)
+
+sync :: Int
+     -> FilePath
+     -> FilePath
+     -> (UTCTime -> Map Arch (Set Package) -> InRelease)
+     -> Store
+     -> IO ()
+sync n tmp dest ctor s = do
+    c <- latest ctor s >>= generate n tmp dest
+    case c of
+        ExitSuccess   -> return ()
+        ExitFailure _ -> throwIO $
+            shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
 
 latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
        -> Store
@@ -66,10 +82,10 @@ latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= parallel)
         maybe m (\p -> Map.insertWith (<>) (entArch p) (Set.singleton p) m)
             <$> Store.metadata e s
 
-generate :: FilePath -> FilePath -> InRelease -> IO ()
-generate tmp dest r@InRelease{..} =
+generate :: Int -> FilePath -> FilePath -> InRelease -> IO ExitCode
+generate n tmp dest r@InRelease{..} =
     withTempDirectory tmp "apt." $ \path -> do
-        ids <- runParIO $ parMapM (release path) (Map.toList relPkgs)
+        ids <- parMapM n (release path) (Map.toList relPkgs)
 
         let rel = path ++ "/Release"
 
@@ -81,8 +97,7 @@ generate tmp dest r@InRelease{..} =
 
         diff path dest >>= mapM_ removePath
 
-        -- FIXME: in haskell
-        void $ system ("cp -rf " ++ path ++ "/* " ++ dest ++ "/")
+        system $ "cp -rf " ++ path ++ "/* " ++ dest ++ "/"
   where
     release base (arch, ps) = liftIO $ do
         let dir  = base ++ BS.unpack ("/binary-" <> toByteString arch)

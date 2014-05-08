@@ -23,20 +23,22 @@ import           Control.DeepSeq
 import           Control.Error
 import           Control.Exception
 import           Control.Monad
-import           Control.Monad.Catch        hiding (try, finally)
+import           Control.Monad.Catch          hiding (try, finally)
 import           Control.Monad.IO.Class
-import qualified Crypto.Hash.Conduit        as Crypto
-import           Data.ByteString            (ByteString)
-import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Control.Monad.Par.Combinator as Par
+import qualified Control.Monad.Par.IO         as Par
+import qualified Crypto.Hash.Conduit          as Crypto
+import           Data.ByteString              (ByteString)
+import qualified Data.ByteString.Lazy.Char8   as LBS
 import           Data.Function
-import           Data.List                  (deleteFirstsBy)
-import           Network.AWS                hiding (async)
+import           Data.List                    (deleteFirstsBy)
+import           Network.AWS                  hiding (async)
 import           System.APT.Types
 import           System.Directory
 import           System.Exit
 import           System.FilePath
 import           System.IO
-import qualified System.IO.Temp             as Temp
+import qualified System.IO.Temp               as Temp
 import           System.Posix.Files
 import           System.Process
 
@@ -136,3 +138,11 @@ removePath p = exist f >>= (`when` rm f)
         D{} -> (doesDirectoryExist, removeDirectoryRecursive)
 
     f = absolute p
+
+parMapM :: Int -> (a -> IO b) -> [a] -> IO [b]
+parMapM n f = Par.runParIO $ mapM_ (Par.parMapM f) . chunks n
+  where
+    chunks _ [] = []
+    chunks n xs =
+        let (ys, zs) = splitAt n xs
+        in  ys : chunks n zs

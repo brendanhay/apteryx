@@ -20,6 +20,8 @@
 
 module Main (main) where
 
+import Control.Exception (throwIO)
+
 import           Control.Applicative
 import           Control.Concurrent
 import           Control.Monad
@@ -35,7 +37,6 @@ import           Data.Maybe
 import           Data.Monoid
 import           Data.String
 import           Data.Time.Clock
-import           Data.Time.Clock.POSIX
 import           Data.Word
 import qualified Network.HTTP.Conduit        as HTTP
 import           Network.HTTP.ReverseProxy
@@ -67,6 +68,7 @@ data Options = Options
     , optKey      :: !Bucket
     , optTemp     :: !FilePath
     , optWWW      :: !FilePath
+    , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
@@ -74,15 +76,36 @@ data Options = Options
 -- - Additional flags
 --   Origin
 --   Label
---   Codename/Distribution
+--   Codename/Distribution -- many
 --   Valid-Until
 --   Description
 
 -- - InRelease signing
 
--- - Add distribution
---   Requires uploader being able to upload to specific distros, or none (equates to all)
---   Need to write out the indicies per distro
+-- architectures:
+--  remove all from InRelease
+--  if specified, will create releases for each one containing the 'all' packages
+--  if necessary
+--  merge all into others
+
+-- distributions:
+--  will generate a release for each distribution
+
+-- component:
+--  specify the name of the component to use
+
+-- archive:
+--  add to release indicies, should be same as the distribution name
+
+-- translations:
+--  /dists/<dist>/i18n/Translation-en.gz
+    -- Package
+    -- Description-md5
+    -- Description-$LANG
+
+-- contents:
+--  /dists/<dist>/<comp>/Contents-<arch>.gz
+-- ar -p .deb | tar -ztf data.tar.gz
 
 options :: Parser Options
 options = Options
@@ -122,6 +145,14 @@ options = Options
         <> metavar "PATH"
         <> help "Directory to serve the generated Packages index from. [default: www]"
         <> value "www"
+         )
+
+    <*> option
+         ( long "concurrency"
+        <> short 'c'
+        <> metavar "INT"
+        <> help "Maximum number of packages to process concurrently. [default: 6]"
+        <> value 6
          )
 
     <*> option
@@ -202,8 +233,11 @@ serve :: Options -> IO ()
 serve o@Options{..} = do
     say_ "aws" "Discovering credentials..."
     e@Env{..} <- newEnv o
+
     say_ "index" "Syncing package database..."
-    Index.latest (spec o) appStore >>= Index.generate optTemp optWWW
+    r <- runApp e . runEitherT $ sync (const id)
+    either throwIO (const $ return ()) r
+
     say_ "server" "Apteryx server starting..."
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
@@ -235,16 +269,10 @@ routes = do
         .&. capture "vers"
         .&. request
 
-    -- patch "/packages/:arch/:name/:vers" addPackage
-    --      $  capture "arch"
-    --     .&. capture "name"
-    --     .&. capture "vers"
-
-    -- All shouldn't appear in the main arch
-    -- packages with arch all should appear in every release indicie
-    -- dist should match whatever the server started with (list?)
-
-   -- Enforce the dist = the distro/codename supplied to the cmdline options
+    patch "/packages/:arch/:name/:vers" addPackage
+         $  capture "arch"
+        .&. capture "name"
+        .&. capture "vers"
 
     get "/dists/:dist/InRelease" (getIndex "InRelease")
          $ capture "dist"
@@ -270,12 +298,11 @@ routes = do
 getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     Env{..} <- ask
+    t       <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
+    u       <- Store.presign (Entry n v a ()) t appStore
 
-    t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
-    u <- Store.presign (Entry n v a ()) t appStore
-
-    let (host, url)   = BS.break (== '/') (BS.drop 8 u)
-        (path, query) = BS.break (== '?') url
+    let (host, url) = BS.break (== '/') (BS.drop 8 u)
+        (path, qry) = BS.break (== '?') url
 
     let f = WPRModifiedRequest
               (defaultRequest
@@ -283,11 +310,11 @@ getPackage (a ::: n ::: v ::: rq) = do
                    , rawPathInfo    = path
                    , requestHeaders = []
                    , isSecure       = True
-                   , rawQueryString = BS.drop 1 query
+                   , rawQueryString = BS.drop 1 qry
                    })
               (ProxyDest host 443)
 
-    sayT "proxy" "{}{}{}" $ map BS.unpack [host, path, query]
+    sayT "proxy" "{}" . BS.unpack $ host <> path <> qry
 
     liftIO $ waiProxyTo (return . const f) defaultOnExc appManager rq
 
@@ -301,8 +328,7 @@ addPackage (a ::: n ::: v) = do
   where
     respond x True = do
         sayT name "Found package {}, rebuilding local index" [x]
-        ask >>= \e -> catchError . withMVar (appLock e) $ const (sync e)
-        sayT name "Index rebuild complete after adding {}" [x]
+        sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
 
     respond x False = do
@@ -312,8 +338,7 @@ addPackage (a ::: n ::: v) = do
     name = "add-package"
 
 triggerRebuild :: Handler
-triggerRebuild =
-    ask >>= \e -> catchError (lock (appLock e) (sync e)) >>= respond
+triggerRebuild = sync lock >>= respond
   where
     respond True = do
         sayT_ name "Triggering local index rebuild"
@@ -344,16 +369,18 @@ getIndex f _ = do
 getArch :: FilePath -> ByteString ::: Arch -> Handler
 getArch f (d ::: a) = getIndex ("binary-" ++ show a </> f) d
 
+sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
+sync f = do
+    Env{..} <- ask
+    let Options{..} = appOptions
+        ctor        = mkInRelease "origin" "label" "codename" "description"
+    catchError . f appLock $ Index.sync optN optTemp optWWW ctor appStore
+
 blank :: Response
 blank = plain status200 ""
 
 plain :: Status -> LBS.ByteString -> Response
 plain code = responseLBS code []
-
-sync :: Env -> IO ()
-sync Env{..} =
-    Index.latest (spec appOptions) appStore
-        >>= Index.generate (optTemp appOptions) (optWWW appOptions)
 
 onError :: Error -> App Response
 onError e = case statusCode code of
@@ -384,5 +411,3 @@ logRequest l app rq = do
         +++ fromMaybe mempty (lookup "referer" $ requestHeaders rq)
         +++ '"'
     return rs
-
-spec Options{..} = mkInRelease "origin" "label" "codename" "description"

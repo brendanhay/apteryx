@@ -20,7 +20,6 @@ module System.APT.Store
 
     , add
     , get
-    , raw
     , copy
     , entries
     , metadata
@@ -107,22 +106,6 @@ get o f s = aws s $ do
           (hush rs)
   where
     hoist_ e = hoist $ either throwM return <=< runEnv e
-
-raw :: (MonadIO m, Keyed a)
-    => Entry a
-    -> Store
-    -> m (Source IO ByteString, IO ())
-raw o s = aws s $ do
-    e  <- getEnv
-    rs <- send GetObject
-        { goBucket  = bucketName s
-        , goKey     = objectKey o s
-        , goHeaders = []
-        }
-    (bdy, g) <- unwrapResumable (responseBody rs)
-    return ( hoist (either throwM return <=< runEnv e) bdy
-           , runEnv e g >>= either throwM return
-           )
 
 -- | Lookup the metadata for a specific entry.
 metadata :: (MonadIO m, Keyed a) => Entry a -> Store -> m (Maybe Package)
