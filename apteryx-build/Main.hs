@@ -1,4 +1,4 @@
-
+{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
@@ -18,7 +18,6 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Control.Monad
 import           Data.ByteString               (ByteString)
 import           Data.Monoid
 import           Network.AWS
@@ -77,8 +76,8 @@ options = Options
          ( long "concurrency"
         <> short 'c'
         <> metavar "INT"
-        <> help "Maximum number of packages to process concurrently. [default: 6]"
-        <> value 6
+        <> help ("Maximum number of packages to process concurrently. [default: " ++ show numThreads ++ "]")
+        <> value numThreads
          )
 
     <*> option
@@ -108,7 +107,8 @@ main = do
     mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
 
     say n "Copying to {}..." [optTo]
-    void $ parMapM optN (worker s optTemp optTo)) xs
+
+    parMapM_ optN (worker s optTemp optTo) xs
 
     maybe (return ())
           (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
@@ -121,9 +121,9 @@ main = do
         m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
         case m of
             Nothing -> say n "Unable to retrieve package from {}" [entAnn]
-            Just x  ->
-                   say n "Read package description from {}" [entAnn]
-                *> Store.copy o x dest s
-                <* say n "Copied {} to {}" [build entAnn, build dest]
+            Just x  -> do
+                say n "Read package description from {}" [entAnn]
+                Store.copy o x dest s
+                say n "Copied {} to {}" [build entAnn, build dest]
       where
         n = "worker"

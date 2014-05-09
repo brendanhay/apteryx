@@ -219,10 +219,13 @@ data Stat = Stat
 
 instance NFData Stat
 
-type Meta = Map (CI ByteString) ByteString
+data Meta = Meta
+    { metaDesc  :: !ByteString
+    , metaOther :: Map (CI ByteString) ByteString
+    , metaStat  :: !Stat
+    } deriving (Eq, Ord, Show)
 
-type Object  = Entry Key
-type Package = Entry (Stat, Meta)
+instance NFData Meta
 
 data Entry a = Entry
     { entName :: !Name
@@ -233,17 +236,14 @@ data Entry a = Entry
 
 instance NFData a => NFData (Entry a)
 
-stat :: Package -> Stat
-stat = fst . entAnn
+type Object  = Entry Key
+type Package = Entry Meta
 
-meta :: Package -> Meta
-meta = snd . entAnn
+stat :: Package -> Stat
+stat = metaStat . entAnn
 
 mkEntry :: Name -> Vers -> Arch -> Entry ()
 mkEntry n v a = Entry n v a ()
-
-annotate :: Stat -> Meta -> Entry a -> Package
-annotate s m o = o { entAnn = (s, m) }
 
 instance FromByteString Object where
     parser = do
@@ -256,25 +256,6 @@ instance FromByteString Object where
             <*> parser <* char '_'
             <*> parser <* string (Text.encodeUtf8 debExt)
             <*> pure (Key $ Text.decodeUtf8 k)
-
-instance ToBytes Package where
-    bytes p@Entry{..} = joinLines $
-        [ "Package: "      =@ entName
-        , "Version: "      =@ entVers
-        , "Architecture: " =@ toByteString entArch
-        , "Size: "         =@ toByteString statSize
-        , "MD5sum: "       =@ base16 statMD5 -- Explicitly lowercase s in MD5sum.
-        , "SHA1: "         =@ base16 statSHA1
-        , "SHA256: "       =@ base16 statSHA256
-        ] ++ map (Build.byteString . line) (Map.toList $ meta p)
-      where
-        Stat{..} = stat p
-
-        line (k, v) = upcase (CI.original k) <> ": " <> v
-
-        upcase k
-            | Just (c, bs) <- BS.uncons k = toUpper c `BS.cons` bs
-            | otherwise                   = k
 
 data Index = Index
     { idxRel  :: !FilePath

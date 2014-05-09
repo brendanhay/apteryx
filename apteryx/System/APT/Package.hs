@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TupleSections     #-}
@@ -12,16 +13,16 @@
 -- Stability   : experimental
 -- Portability : non-portable (GHC extensions)
 
-module System.APT.Package
-    (
-    -- * Serialisation
-      toHeaders
+module System.APT.Package where
+    -- (
+    -- -- * Serialisation
+    --   toHdrs
 
-    -- * Deserialisation
-    , fromHeaders
-    , fromMap
-    , fromFile
-    ) where
+    -- -- * Deserialisation
+    -- , fromHeaders
+    -- , fromMap
+    -- , fromFile
+    -- ) where
 
 import qualified Codec.Compression.Zlib           as ZLib
 import           Control.Applicative              hiding (optional)
@@ -35,6 +36,7 @@ import           Data.ByteString                  (ByteString)
 import qualified Data.ByteString.Base16           as Base16
 import qualified Data.ByteString.Base64           as Base64
 import qualified Data.ByteString.Base64.Lazy      as LBase64
+import           Data.ByteString.Builder          (Builder)
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From             (FromByteString)
 import qualified Data.ByteString.Lazy.Char8       as LBS
@@ -53,71 +55,8 @@ import           System.APT.IO
 import           System.APT.Types
 import           System.IO                        (hClose)
 
-toHeaders :: Package -> [Header]
-toHeaders p@Entry{..} =
-    [ ("content-md5",  base64 statMD5)
-    , ("content-type", "application/x-deb")
-    ] ++ [ "package"         =: entName
-         , "version"         =: entVers
-         , "architecture"    =: toByteString entArch
-         , "sha1"            =: base64 statSHA1
-         , "sha256"          =: base64 statSHA256
-         , "description-gz"  =: LBase64.encode zip
-         , "description-md5" =: base16 md5
-         ] ++ map (uncurry (=:)) fs
-  where
-    Stat{..} = stat p
-
-    (=:) k = (CI.mk headerPrefix <> k,) . toByteString
-
-    zip = ZLib.compress (LBS.fromStrict desc)
-    md5 = hash desc :: Digest MD5
-
-    desc = case md of
-        Just (_, x) -> x
-        Nothing     -> ""
-
-    (md, fs) = first listToMaybe
-        . partition ((== "description") . fst)
-        . Map.toList
-        . restrict
-        $ meta p
-
-fromHeaders :: [Header] -> Either Error Package
-fromHeaders xs = fromMap hs `ap` st
-  where
-    st = Stat
-        <$> (require "content-length" hs >>= field Size decimal)
-        <*> digest "etag" (BS.init . BS.tail)
-        <*> digest "sha1" id
-        <*> digest "sha256" id
-
-    digest k f = require k hs >>= \e ->
-        let msg = "Unable to read digest: " <> CI.original k
-         in either (Left . invalidField)
-                   (note (invalidField msg) . digestFromByteString)
-                   (Base64.decode $ f e)
-
-    hs = Map.fromList $ map (first stripPrefix) xs
-
-fromMap :: Map (CI ByteString) ByteString -> Either Error (Stat -> Package)
-fromMap fs = do
-    e <- Entry
-        <$> require "package" fs
-        <*> require "version" fs
-        <*> require "architecture" fs
-        <*> pure ()
-    return $ \st -> annotate st fields e
-  where
-    fields = restrict $
-        case Map.lookup "description-gz" fs of
-            Nothing -> fs
-            Just x  ->
-                either (const $ Map.delete "description-md5" fs)
-                       (\v -> Map.insert "description" v fs)
-                       (ungzip <$> Base64.decode x)
-
-    ungzip = LBS.toStrict . ZLib.decompress . LBS.fromStrict
+fromHeaders :: FromHeaders a => [Header] -> Either Error a
+fromHeaders = parseHeaders . Map.fromList . map (first stripPrefix)
 
 fromFile :: MonadIO m
          => FilePath
@@ -126,7 +65,7 @@ fromFile :: MonadIO m
 fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
     catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
     bs <- runShell $ "ar -p " ++ path ++ " control.tar.gz | tar -Oxz ./control"
-    hoistEither (fields bs >>= fromMap) `ap` getFileStat path
+    hoistEither (fields bs >>= fromControl) `ap` getFileStat path
   where
     fields = field (Map.fromList . map (first CI.mk)) parser
 
@@ -139,6 +78,183 @@ fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
         , endOfLine >> return True
         , endOfInput >> return True
         ]
+
+class ToIndex a where
+    toIndex :: a -> [Builder]
+
+instance (ToBytes k, ToBytes v) => ToIndex (Map (CI k) v) where
+    toIndex = map line . Map.toList
+      where
+        line (k, v) = bytes (CI.original k) <> ": " <> bytes v
+
+instance ToIndex Stat where
+    toIndex Stat{..} =
+        [ "Size: "   =@ statSize
+        , "MD5sum: " =@ base16 statMD5
+        , "SHA1: "   =@ base16 statSHA1
+        , "SHA256: " =@ base16 statSHA256
+        ]
+
+instance ToIndex Meta where
+    toIndex Meta{..} =
+        [ "Description: "     =@ metaDesc
+        , "Description-md5: " =@ base16 (hash metaDesc :: Digest MD5)
+        ] ++ toIndex metaStat
+
+instance ToIndex Package where
+    toIndex Entry{..} =
+        [ "Package: "      =@ entName
+        , "Version: "      =@ entVers
+        , "Architecture: " =@ entArch
+        ] ++ toIndex entAnn
+
+class FromControl a where
+    fromControl :: Map (CI ByteString) ByteString -> Either Error a
+
+instance FromControl (Stat -> Meta) where
+    fromControl m = return $ Meta desc other
+      where
+        desc  = fromMaybe "" $ Map.lookup "description" m
+        other = Map.filterWithKey f $ restrict m
+
+        f "description"     _ = False
+        f "description-md5" _ = False
+        f _                 _ = True
+
+instance FromControl (Stat -> Package) where
+    fromControl m = do
+        f <- Entry
+            <$> require "package" m
+            <*> require "version" m
+            <*> require "architecture" m
+        g <- fromControl m
+        return $ f . g
+
+class ToHeaders a where
+    toHeaders :: a -> [Header]
+
+instance ToBytes v => ToHeaders (Map (CI ByteString) v) where
+    toHeaders = map (uncurry (=:)) . Map.toList
+
+instance ToHeaders Stat where
+    toHeaders Stat{..} =
+        [ "content-md5"  =- base64 statMD5
+        , "content-type" =- ("application/x-deb" :: ByteString)
+        , hSHA1          =: base64 statSHA1
+        , hSHA256        =: base64 statSHA256
+        ]
+
+instance ToHeaders Meta where
+    toHeaders Meta{..} =
+        (hDesc =: gz) : toHeaders metaOther ++ toHeaders metaStat
+      where
+        gz = LBase64.encode . ZLib.compress $ LBS.fromStrict metaDesc
+
+instance ToHeaders Package where
+    toHeaders Entry{..} =
+        [ hName =: entName
+        , hVers =: entVers
+        , hArch =: toByteString entArch
+        ] ++ toHeaders entAnn
+
+(=-) :: ToBytes a => k -> a -> (k, ByteString)
+(=-) k = (k,) . toByteString
+
+(=:) :: ToBytes a => CI ByteString -> a -> (CI ByteString, ByteString)
+(=:) k = (CI.mk prefix <> k,) . toByteString
+
+class FromHeaders a where
+    parseHeaders :: Map (CI ByteString) ByteString -> Either Error a
+
+instance FromHeaders Stat where
+    parseHeaders hs = Stat
+        <$> (require "content-length" hs >>= field Size decimal)
+        <*> digest "etag" (BS.init . BS.tail)
+        <*> digest hSHA1 id
+        <*> digest hSHA256 id
+      where
+        digest k f = require k hs >>= \x ->
+            let msg = "Unable to read digest: " <> CI.original k
+             in either (Left . invalidField)
+                       (note (invalidField msg) . digestFromByteString)
+                       (Base64.decode $ f x)
+
+instance FromHeaders Meta where
+    parseHeaders hs = Meta desc other <$> parseHeaders hs
+      where
+        desc  = fromMaybe "" (Map.lookup hDesc hs)
+        other = Map.filterWithKey (\k _ -> k /= hDesc) (restrict hs)
+
+instance FromHeaders Package where
+    parseHeaders hs = Entry
+        <$> require hName hs
+        <*> require hVers hs
+        <*> require hArch hs
+        <*> parseHeaders hs
+
+hName, hVers, hArch, hDesc, hSHA1, hSHA256 :: CI ByteString
+hName   = "n"
+hVers   = "v"
+hArch   = "a"
+hDesc   = "d"
+hSHA1   = "1"
+hSHA256 = "256"
+
+-- parseHeaders :: [Header] -> Either Error Package
+-- parseHeaders xs = fromMap hs `ap` st
+--   where
+
+-- fromMap :: Map (CI ByteString) ByteString -> Either Error (Stat -> Package)
+-- fromMap fs = do
+--     e <- Entry
+--         <$> require "package" fs
+--         <*> require "version" fs
+--         <*> require "architecture" fs
+--         <*> pure ()
+--     return $ \st -> annotate st fields e
+--   where
+--     fields = restrict $
+--         case Map.lookup "description-gz" fs of
+--             Nothing -> fs
+--             Just x  ->
+--                 either (const $ Map.delete "description-md5" fs)
+--                        (\v -> Map.insert "description" v fs)
+--                        (ungzip <$> Base64.decode x)
+
+--     ungzip = LBS.toStrict . ZLib.decompress . LBS.fromStrict
+
+-- toHeaders :: Package -> [Header]
+-- toHeaders p@Entry{..} =
+--     [ ("content-md5",  base64 statMD5)
+--     , ("content-type", "application/x-deb")
+--     ] ++ [ "package"         =: entName
+--          , "version"         =: entVers
+--          , "architecture"    =: toByteString entArch
+--          , "sha1"            =: base64 statSHA1
+--          , "sha256"          =: base64 statSHA256
+--          , "description-gz"  =: LBase64.encode zip
+--          , "description-md5" =: base64 md5
+--          ] ++ map (uncurry (=:)) fs
+--   where
+--     Stat{..} = stat p
+
+
+--     zip = ZLib.compress (LBS.fromStrict desc)
+--     md5 = hash desc :: Digest MD5
+
+--     desc = case md of
+--         Just (_, x) -> x
+--         Nothing     -> ""
+
+--     (md, fs) = first listToMaybe
+--         . partition ((== "description") . fst)
+--         . Map.toList
+--         . restrict
+--         $ meta p
+
+
+-- class FromHeaders a where
+--     parseHeaders :: [Header] -> Either Error a
 
 require :: FromByteString a
         => CI ByteString
@@ -170,11 +286,11 @@ restrict = Map.filterWithKey (\k _ -> k `elem` optional)
         , "package-type"
         ]
 
-headerPrefix :: ByteString
-headerPrefix = "x-amz-meta-"
-
 stripPrefix :: CI ByteString -> CI ByteString
 stripPrefix = CI.map f
   where
-    f x | headerPrefix `BS.isPrefixOf` x = BS.drop (BS.length headerPrefix) x
+    f x | prefix `BS.isPrefixOf` x = BS.drop (BS.length prefix) x
         | otherwise                      = x
+
+prefix :: ByteString
+prefix = "x-amz-meta-"

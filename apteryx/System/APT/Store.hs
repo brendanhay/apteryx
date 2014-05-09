@@ -25,7 +25,7 @@ module System.APT.Store
     , metadata
     , presign
 
-    , objectKey
+    , toKey
     ) where
 
 import           Control.Applicative
@@ -80,15 +80,15 @@ add :: MonadIO m => Package -> FilePath -> Store -> m ()
 add p path s = aws s $
     send_ PutObject
         { poBucket  = bucketName s
-        , poKey     = objectKey p s
+        , poKey     = toKey p s
         , poHeaders = Pkg.toHeaders p
         , poBody    = requestBodySource size (Conduit.sourceFile path)
         }
   where
     size = unSize . statSize $ stat p
 
-get :: (MonadIO m, Keyed a)
-    => Entry a
+get :: (MonadIO m, ToKey a)
+    => a
     -> (Source IO ByteString -> AWS b)
     -> Store
     -> m (Maybe b)
@@ -96,7 +96,7 @@ get o f s = aws s $ do
     e  <- getEnv
     rs <- sendCatch GetObject
         { goBucket  = bucketName s
-        , goKey     = objectKey o s
+        , goKey     = toKey o s
         , goHeaders = []
         }
     maybe (return Nothing)
@@ -108,16 +108,17 @@ get o f s = aws s $ do
     hoist_ e = hoist $ either throwM return <=< runEnv e
 
 -- | Lookup the metadata for a specific entry.
-metadata :: (MonadIO m, Keyed a) => Entry a -> Store -> m (Maybe Package)
+metadata :: (MonadIO m, ToKey a) => a -> Store -> m (Either Error Package)
 metadata o s = aws s $ do
     rs <- hush <$> sendCatch HeadObject
         { hoBucket  = bucketName s
-        , hoKey     = objectKey o s
+        , hoKey     = key
         , hoHeaders = []
         }
-    maybe (return Nothing)
-          (return . hush . Pkg.fromHeaders . responseHeaders)
-          rs
+    return $ maybe (Left err) (Pkg.fromHeaders . responseHeaders) rs
+  where
+    err = missingPackage $ "Unable to find package " <> key
+    key = toKey o s
 
 -- | Copy an object from the store, to another location in S3,
 --   overriding the metadata with the supplied package description.
@@ -125,8 +126,8 @@ copy :: MonadIO m => Object -> Package -> Bucket -> Store -> m ()
 copy from to bkt s = aws s $
     send_ PutObjectCopy
         { pocBucket    = bktName bkt
-        , pocKey       = objectKey to s
-        , pocSource    = bucketName s <> "/" <> objectKey from s
+        , pocKey       = toKey to s
+        , pocSource    = bucketName s <> "/" <> toKey from s
         , pocDirective = Replace
         , pocHeaders   = Pkg.toHeaders to
         }
@@ -157,11 +158,11 @@ entries s = aws s $ paginate start
         . sortBy (compare `on` (Down . entVers))
         . mappend xs
 
-presign :: (MonadIO m, Keyed a) => Entry a -> UTCTime -> Store -> m ByteString
+presign :: (MonadIO m, ToKey a) => a -> UTCTime -> Store -> m ByteString
 presign e t s = aws s $ presignS3 GET bkt key t
   where
     bkt = Text.encodeUtf8 $ bucketName s
-    key = Text.encodeUtf8 $ objectKey e s
+    key = Text.encodeUtf8 $ toKey e s
 
 -- | Run an AWS action using the store's environment.
 -- FIXME: proper error handling
@@ -177,25 +178,34 @@ bucketPrefix t s = strip prefix <> "/" <> strip t
     prefix  = fromMaybe "" . bktPrefix $ _bucket s
     strip x = fromMaybe x $ "/" `Text.stripSuffix` x
 
-class Keyed a where
-    objectKey :: Entry a -> Store -> Text
-    objectKey Entry{..} = bucketPrefix ("pool/" <> urlEncode path)
-      where
-        path = Key $ Text.concat
-            [ name
-            , "/"
-            , name
-            , "_"
-            , Text.decodeUtf8 (verRaw entVers)
-            , "_"
-            , Text.decodeUtf8 (toByteString entArch)
-            , ".deb"
-            ]
+class ToKey a where
+    toKey :: a -> Store -> Text
 
-        name = Text.decodeUtf8 (unName entName)
+instance ToKey Key where
+    toKey = const . urlEncode
 
-instance Keyed (a, b)
-instance Keyed ()
+instance ToKey (Entry Key) where
+    toKey x = toKey (entAnn x)
 
-instance Keyed Key where
-    objectKey = const . urlEncode . entAnn
+instance ToKey (Entry Meta) where
+    toKey = objectKey
+
+instance ToKey (Entry ()) where
+    toKey = objectKey
+
+objectKey :: Entry a -> Store -> Text
+objectKey Entry{..} = bucketPrefix (urlEncode path)
+  where
+    path = Text.concat
+        [ "pool/"
+        , name
+        , "/"
+        , name
+        , "_"
+        , Text.decodeUtf8 (verRaw entVers)
+        , "_"
+        , Text.decodeUtf8 (toByteString entArch)
+        , ".deb"
+        ]
+
+    name = Text.decodeUtf8 (unName entName)

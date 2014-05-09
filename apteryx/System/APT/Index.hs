@@ -34,6 +34,7 @@ import           Data.Conduit
 import qualified Data.Conduit.Binary       as Conduit
 import qualified Data.Conduit.Zlib         as Conduit
 import qualified Data.Foldable             as Fold
+import           Data.List                 (intersperse)
 import           Data.Map.Strict           (Map)
 import qualified Data.Map.Strict           as Map
 import           Data.Maybe
@@ -44,6 +45,7 @@ import           Data.Time
 import           Network.HTTP.Conduit      hiding (path)
 import           Prelude                   hiding (lookup)
 import           System.APT.IO
+import qualified System.APT.Package        as Pkg
 import           System.APT.Store          (Store)
 import qualified System.APT.Store          as Store
 import           System.APT.Types
@@ -63,23 +65,22 @@ sync :: Int
      -> Store
      -> IO ()
 sync n tmp dest ctor s = do
-    c <- latest ctor s >>= generate n tmp dest
+    c <- latest n ctor s >>= generate n tmp dest
     case c of
         ExitSuccess   -> return ()
         ExitFailure _ -> throwIO $
             shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
 
-latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
+latest :: Int
+       -> (UTCTime -> Map Arch (Set Package) -> InRelease)
        -> Store
        -> IO InRelease
-latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= parallel)
+latest n ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
   where
-    parallel = fmap (Map.unionsWith (<>))
-        . runParIO
-        . parMapM (Fold.foldrM metadata mempty)
+    par = fmap (Map.unionsWith (<>)) . parMapM n (Fold.foldrM metadata mempty)
 
     metadata e m =
-        maybe m (\p -> Map.insertWith (<>) (entArch p) (Set.singleton p) m)
+        either (const m) (\p -> Map.insertWith (<>) (entArch p) (Set.singleton p) m)
             <$> Store.metadata e s
 
 generate :: Int -> FilePath -> FilePath -> InRelease -> IO ExitCode
@@ -120,16 +121,21 @@ generate n tmp dest r@InRelease{..} =
         forM [rel, pkg, pkgz] $ \x ->
             Index (drop (length base + 1) x) <$> getFileStat x
 
-    contents p@Entry{..} =
-        let name = entArch +++ "/" +++ entName +++ "/" +++ entVers
-         in bytes p <> ("Filename: packages/" +++ name) <> "\n\n"
-
     writef p f = withFile p WriteMode $ \hd -> do
         hSetBinaryMode hd True
         hSetBuffering hd (BlockBuffering Nothing)
         f hd
 
     readf p = withFile p ReadMode
+
+    contents p@Entry{..} =
+        let f = "Filename: packages/"
+             +++ entArch
+             +++ "/"
+             +++ entName
+             +++ "/"
+             +++ entVers
+         in mconcat . intersperse "\n" $ f : "\n" : Pkg.toIndex p
 
 -- FIXME: Move to a more relevant location
 

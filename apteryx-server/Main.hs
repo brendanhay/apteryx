@@ -20,10 +20,9 @@
 
 module Main (main) where
 
-import Control.Exception (throwIO)
-
 import           Control.Applicative
 import           Control.Concurrent
+import           Control.Exception           (throwIO)
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
@@ -38,6 +37,7 @@ import           Data.Monoid
 import           Data.String
 import           Data.Time.Clock
 import           Data.Word
+import           GHC.Conc
 import qualified Network.HTTP.Conduit        as HTTP
 import           Network.HTTP.ReverseProxy
 import           Network.HTTP.Types
@@ -151,8 +151,8 @@ options = Options
          ( long "concurrency"
         <> short 'c'
         <> metavar "INT"
-        <> help "Maximum number of packages to process concurrently. [default: 6]"
-        <> value 6
+        <> help ("Maximum number of packages to process concurrently. [default: " ++ show numThreads ++ "]")
+        <> value numThreads
          )
 
     <*> option
