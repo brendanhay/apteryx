@@ -139,8 +139,5 @@ removePath p = exist f >>= (`when` rm f)
 
     f = absolute p
 
-parMapM_ :: (Functor m, MonadIO m, NFData b) => (a -> IO b) -> [a] -> m ()
-parMapM_ f = void . parMapM f
-
 parMapM :: (MonadIO m, NFData b) => (a -> IO b) -> [a] -> m [b]
 parMapM f = liftIO . Par.runParIO . Par.parMapM (liftIO . f)

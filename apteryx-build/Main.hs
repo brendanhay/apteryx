@@ -116,8 +116,7 @@ main = do
 
         maybe (say n "Unable to retrieve package from {}" [entAnn])
               (\x -> do
-                  say n "Read package description from {}" [entAnn]
-                  threadDelay 1000000
+                  say n "Successfully read package description from {}" [entAnn]
                   Store.copy o x dest s
                   say n "Copied {} to {}" [build entAnn, build dest])
               m
