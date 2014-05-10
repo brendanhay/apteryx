@@ -18,21 +18,20 @@
 module System.APT.IO where
 
 import           Control.Applicative
-import           Control.Concurrent
 import qualified Control.Concurrent.Async     as Async
-import           Control.Concurrent.STM
 import           Control.DeepSeq
 import           Control.Error
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Catch          hiding (try, finally)
 import           Control.Monad.IO.Class
+import qualified Control.Monad.Par.Combinator as Par
+import qualified Control.Monad.Par.IO         as Par
 import qualified Crypto.Hash.Conduit          as Crypto
 import           Data.ByteString              (ByteString)
 import qualified Data.ByteString.Lazy.Char8   as LBS
 import           Data.Function
 import           Data.List                    (deleteFirstsBy)
-import           GHC.Conc
 import           Network.AWS                  hiding (async)
 import           System.APT.Types
 import           System.Directory
@@ -40,7 +39,6 @@ import           System.Exit
 import           System.FilePath
 import           System.IO
 import qualified System.IO.Temp               as Temp
-import           System.IO.Unsafe
 import           System.Posix.Files
 import           System.Process
 
@@ -141,45 +139,8 @@ removePath p = exist f >>= (`when` rm f)
 
     f = absolute p
 
-parMapM_ :: Int -> (a -> IO b) -> [a] -> IO ()
-parMapM_ n f xs = void $ parMapM n f xs
+parMapM_ :: (Functor m, MonadIO m, NFData b) => (a -> IO b) -> [a] -> m ()
+parMapM_ f = void . parMapM f
 
-parMapM :: Int -> (a -> IO b) -> [a] -> IO [b]
-parMapM n f xs = do
-    (as, inp, out) <- threadPool n f
-
-    mapM_ (atomically . writeTQueue inp . Just) xs
-    mapM_ (const . atomically $ writeTQueue inp Nothing) [1..n]
-    mapM_ Async.wait as
-
-    go out []
-  where
-    go out acc = do
-        m <- atomically $ tryReadTQueue out
-        maybe (return acc)
-              (\x -> go out $ x : acc)
-              m
-
-threadPool :: Int
-           -> (a -> IO b)
-           -> IO ([Async.Async ()], TQueue (Maybe a), TQueue b)
-threadPool n f = do
-    (inp, out) <- atomically $ (,) <$> newTQueue <*> newTQueue
-    as         <- mapM (const . Async.async $ go inp out) [1..n]
-
-    mapM_ Async.link as
-
-    return (as, inp, out)
-  where
-    go inp out = do
-        m <- atomically $ readTQueue inp
-        maybe (return ())
-              (\x -> do
-                   y <- f x
-                   atomically $ writeTQueue out y
-                   go inp out)
-              m
-
-numThreads :: Int
-numThreads = (unsafePerformIO getNumCapabilities) * 2
-{-# NOINLINE numThreads #-}
+parMapM :: (MonadIO m, NFData b) => (a -> IO b) -> [a] -> m [b]
+parMapM f = liftIO . Par.runParIO . Par.parMapM (liftIO . f)

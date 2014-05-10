@@ -18,16 +18,19 @@
 module Main (main) where
 
 import           Control.Applicative
-import           Data.ByteString               (ByteString)
+import           Control.Concurrent
+import           Control.Monad.IO.Class
+import           Data.ByteString     (ByteString)
 import           Data.Monoid
+import qualified Data.Text           as Text
 import           Network.AWS
 import           Options.Applicative
 import           System.APT.IO
-import qualified System.APT.Index              as Index
+import qualified System.APT.Index    as Index
 import           System.APT.Log
 import           System.APT.Options
-import qualified System.APT.Package            as Pkg
-import qualified System.APT.Store              as Store
+import qualified System.APT.Package  as Pkg
+import qualified System.APT.Store    as Store
 import           System.APT.Types
 import           System.Environment
 
@@ -38,7 +41,6 @@ data Options = Options
     , optTo       :: !Bucket
     , optTemp     :: !FilePath
     , optAddress  :: Maybe String
-    , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq, Show)
@@ -73,14 +75,6 @@ options = Options
          )
 
     <*> option
-         ( long "concurrency"
-        <> short 'c'
-        <> metavar "INT"
-        <> help ("Maximum number of packages to process concurrently. [default: " ++ show numThreads ++ "]")
-        <> value numThreads
-         )
-
-    <*> option
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
@@ -107,8 +101,7 @@ main = do
     mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
 
     say n "Copying to {}..." [optTo]
-
-    parMapM_ optN (worker s optTemp optTo) xs
+    !_ <- parMapM (worker s optTemp optTo) xs
 
     maybe (return ())
           (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
@@ -117,13 +110,14 @@ main = do
     say_ n "Done."
   where
     worker s tmp dest o@Entry{..} = do
-        say n "Retrieving {}" [entAnn]
+        n <- Text.drop 9 . Text.pack . show <$> liftIO myThreadId
         m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
-        case m of
-            Nothing -> say n "Unable to retrieve package from {}" [entAnn]
-            Just x  -> do
-                say n "Read package description from {}" [entAnn]
-                Store.copy o x dest s
-                say n "Copied {} to {}" [build entAnn, build dest]
-      where
-        n = "worker"
+        say n "Retrieved {}" [entAnn]
+
+        maybe (say n "Unable to retrieve package from {}" [entAnn])
+              (\x -> do
+                  say n "Read package description from {}" [entAnn]
+                  threadDelay 1000000
+                  Store.copy o x dest s
+                  say n "Copied {} to {}" [build entAnn, build dest])
+              m

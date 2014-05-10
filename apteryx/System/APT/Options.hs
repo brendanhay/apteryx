@@ -15,13 +15,15 @@ module System.APT.Options where
 import           Data.Monoid
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
+import           GHC.Conc
 import           Options.Applicative
 import           System.APT.Types
 
 parseOptions :: Parser a -> IO a
 parseOptions p = customExecParser
     (prefs $ showHelpOnError <> columns 100)
-    (info (helper <*> p) fullDesc)
+    (info (helper <*> p) $ fullDesc
+       <> footer ("Concurrency:\n  " ++ show numCapabilities))
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption = fmap Text.pack . strOption

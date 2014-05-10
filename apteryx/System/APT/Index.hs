@@ -58,35 +58,33 @@ import           System.Process
 
 default (Builder)
 
-sync :: Int
-     -> FilePath
+sync :: FilePath
      -> FilePath
      -> (UTCTime -> Map Arch (Set Package) -> InRelease)
      -> Store
      -> IO ()
-sync n tmp dest ctor s = do
-    c <- latest n ctor s >>= generate n tmp dest
+sync tmp dest ctor s = do
+    c <- latest ctor s >>= generate tmp dest
     case c of
         ExitSuccess   -> return ()
         ExitFailure _ -> throwIO $
             shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
 
-latest :: Int
-       -> (UTCTime -> Map Arch (Set Package) -> InRelease)
+latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
        -> Store
        -> IO InRelease
-latest n ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
+latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
   where
-    par = fmap (Map.unionsWith (<>)) . parMapM n (Fold.foldrM metadata mempty)
+    par = fmap (Map.unionsWith (<>)) . parMapM (Fold.foldrM metadata mempty)
 
     metadata e m =
         either (const m) (\p -> Map.insertWith (<>) (entArch p) (Set.singleton p) m)
             <$> Store.metadata e s
 
-generate :: Int -> FilePath -> FilePath -> InRelease -> IO ExitCode
-generate n tmp dest r@InRelease{..} =
+generate :: FilePath -> FilePath -> InRelease -> IO ExitCode
+generate tmp dest r@InRelease{..} =
     withTempDirectory tmp "apt." $ \path -> do
-        ids <- parMapM n (release path) (Map.toList relPkgs)
+        ids <- parMapM (release path) (Map.toList relPkgs)
 
         let rel = path ++ "/Release"
 

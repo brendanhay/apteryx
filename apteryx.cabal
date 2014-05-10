@@ -61,6 +61,8 @@ library
         , http-conduit
         , http-types
         , mmorph
+        , monad-par
+        , monad-par-extras
         , old-locale
         , optparse-applicative
         , process
@@ -87,6 +89,8 @@ executable apteryx-build
         , base
         , bytestring
         , optparse-applicative
+        , text
+        , transformers
 
 -- executable apteryx-upload
 --     main-is:            Main.hs
