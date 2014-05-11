@@ -24,7 +24,6 @@ module System.APT.Index
     ) where
 
 import           Control.Applicative
-import           Control.Error
 import           Control.Exception         (throwIO)
 import           Control.Monad
 import           Control.Monad.IO.Class
@@ -77,9 +76,11 @@ latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
   where
     par = fmap (Map.unionsWith (<>)) . parMapM (Fold.foldrM metadata mempty)
 
-    metadata e m =
-        either (const m) (\p -> Map.insertWith (<>) (entArch p) (Set.singleton p) m)
-            <$> Store.metadata e s
+    metadata o m = do
+        r <- Store.metadata o s
+        case r of
+            Left  e -> throwIO e
+            Right p -> return $ Map.insertWith (<>) (entArch p) (Set.singleton p) m
 
 generate :: FilePath -> FilePath -> InRelease -> IO ExitCode
 generate tmp dest r@InRelease{..} =
@@ -133,7 +134,7 @@ generate tmp dest r@InRelease{..} =
              +++ entName
              +++ "/"
              +++ entVers
-         in mconcat . intersperse "\n" $ f : "\n" : Pkg.toIndex p
+         in mconcat . intersperse "\n" $ Pkg.toIndex p ++ [f, "\n"]
 
 -- FIXME: Move to a more relevant location
 

@@ -37,7 +37,6 @@ import           Data.Monoid
 import           Data.String
 import           Data.Time.Clock
 import           Data.Word
-import           GHC.Conc
 import qualified Network.HTTP.Conduit        as HTTP
 import           Network.HTTP.ReverseProxy
 import           Network.HTTP.Types
@@ -68,7 +67,6 @@ data Options = Options
     , optKey      :: !Bucket
     , optTemp     :: !FilePath
     , optWWW      :: !FilePath
-    , optN        :: !Int
     , optVersions :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
@@ -148,14 +146,6 @@ options = Options
          )
 
     <*> option
-         ( long "concurrency"
-        <> short 'c'
-        <> metavar "INT"
-        <> help ("Maximum number of packages to process concurrently. [default: " ++ show numThreads ++ "]")
-        <> value numThreads
-         )
-
-    <*> option
          ( long "versions"
         <> short 'v'
         <> metavar "INT"
@@ -185,7 +175,7 @@ newEnv o@Options{..} = Env o
     <*> newMVar ()
 
 closeEnv :: Env -> IO ()
-closeEnv = Log.close . appLogger
+closeEnv Env{..} = Log.close appLogger >> HTTP.closeManager appManager
 
 newtype App a = App { unApp :: ReaderT Env IO a }
     deriving ( Functor
@@ -314,7 +304,7 @@ getPackage (a ::: n ::: v ::: rq) = do
                    })
               (ProxyDest host 443)
 
-    sayT "proxy" "{}" . BS.unpack $ host <> path <> qry
+    sayT "proxy" "{}" [BS.unpack $ host <> path <> qry]
 
     liftIO $ waiProxyTo (return . const f) defaultOnExc appManager rq
 
@@ -322,18 +312,18 @@ addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
     s <- asks appStore
     let x' = mkEntry n v a
-        x  = Store.objectKey x' s
+        x  = Store.toKey x' s
     sayT name "Searching for {}" [x]
-    Store.metadata x' s >>= respond x . isJust
+    Store.metadata x' s >>= either (const $ missing x) (const $ found x)
   where
-    respond x True = do
+    missing x = do
+        sayT name "Unable to find package {}" [x]
+        return $ plain status404 "not-found\n"
+
+    found x = do
         sayT name "Found package {}, rebuilding local index" [x]
         sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
-
-    respond x False = do
-        sayT name "Unable to find package {}" [x]
-        return $ plain status404 "not-found\n"
 
     name = "add-package"
 
@@ -374,7 +364,7 @@ sync f = do
     Env{..} <- ask
     let Options{..} = appOptions
         ctor        = mkInRelease "origin" "label" "codename" "description"
-    catchError . f appLock $ Index.sync optN optTemp optWWW ctor appStore
+    catchError . f appLock $ Index.sync optTemp optWWW ctor appStore
 
 blank :: Response
 blank = plain status200 ""

@@ -76,21 +76,21 @@ library
         , unix
         , zlib
 
-executable apteryx-build
-    main-is:            Main.hs
-    hs-source-dirs:     apteryx-build
-    default-language:   Haskell2010
-    ghc-options:        -Wall -threaded -with-rtsopts=-N
+-- executable apteryx-build
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-build
+--     default-language:   Haskell2010
+--     ghc-options:        -Wall -threaded -with-rtsopts=-N
 
-    build-depends:
-          amazonka
-        , async
-        , apteryx
-        , base
-        , bytestring
-        , optparse-applicative
-        , text
-        , transformers
+--     build-depends:
+--           amazonka
+--         , async
+--         , apteryx
+--         , base
+--         , bytestring
+--         , optparse-applicative
+--         , text
+--         , transformers
 
 -- executable apteryx-upload
 --     main-is:            Main.hs

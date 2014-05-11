@@ -115,9 +115,9 @@ metadata o s = aws s $ do
         , hoKey     = key
         , hoHeaders = []
         }
-    return $ maybe (Left err) (Pkg.fromHeaders . responseHeaders) rs
+    return $ maybe (Left msg) (Pkg.fromHeaders . responseHeaders) rs
   where
-    err = missingPackage $ "Unable to find package " <> key
+    msg = missingPackage $ "Unable to find package " <> key
     key = toKey o s
 
 -- | Copy an object from the store, to another location in S3,
