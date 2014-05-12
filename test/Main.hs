@@ -15,11 +15,8 @@ module Main (main) where
 import           Control.Applicative
 import           Control.Error
 import           Data.ByteString            (ByteString)
-import qualified Data.ByteString.Char8      as BS
-import           Data.CaseInsensitive       (CI)
 import qualified Data.CaseInsensitive       as CI
 import           Data.List                  (sort)
-import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
 import           Data.Monoid                ((<>))
 import qualified System.APT.Package         as Pkg
