@@ -67,7 +67,7 @@ value k =
 -- This is the default field type if the definition of the field does not
 -- specify a different type.
 simple :: Parser ByteString
-simple = takeTill eof <?> "simple field"
+simple = takeLine <?> "simple field"
 
 -- | The value of a multiline field may comprise multiple continuation lines.
 --
@@ -101,7 +101,7 @@ skipComments :: Parser ()
 skipComments = option () . void $ char '#' >> takeLine
 
 takeLine :: Parser ByteString
-takeLine = takeTill eof <* (endOfLine <|> endOfInput)
+takeLine = takeTill eol <* (endOfLine <|> endOfInput)
 
 -- | Whitespace must not appear inside names (of packages, architectures, files
 -- or anything else) or version numbers, or between the characters of
@@ -112,5 +112,5 @@ whitespace c = c == ' ' || c == '\t'
 -- | Paragraph separators (empty lines) and lines consisting only of spaces and
 -- tabs are not allowed within field values or between fields. Empty lines in field
 -- values are usually escaped by representing them by a space followed by a dot.
-eof :: Char -> Bool
-eof c = c == '\n' || c == '\r'
+eol :: Char -> Bool
+eol c = c == '\n' || c == '\r'

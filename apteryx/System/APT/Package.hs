@@ -156,12 +156,16 @@ instance FromControl (Stat -> Meta) where
 
 instance FromControl (Stat -> Package) where
     fromControl m = do
-        f <- Entry
-            <$> require "package" m
-            <*> require "version" m
-            <*> require "architecture" m
-        g <- fromControl m
-        return $ f . g
+        x <- fromControl m :: Either Error (Entry ())
+        f <- fromControl m
+        return $ (\y -> x { entAnn = y }) . f
+
+instance FromControl (Entry ()) where
+    fromControl m = Entry
+        <$> require "package" m
+        <*> require "version" m
+        <*> require "architecture" m
+        <*> pure ()
 
 class ToHeaders a where
     toHeaders :: a -> [Header]

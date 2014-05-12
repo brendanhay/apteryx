@@ -18,9 +18,10 @@ import           Data.ByteString            (ByteString)
 import qualified Data.ByteString.Char8      as BS
 import           Data.CaseInsensitive       (CI)
 import qualified Data.CaseInsensitive       as CI
+import           Data.List                  (sort)
 import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
-import           Data.Monoid
+import           Data.Monoid                ((<>))
 import qualified System.APT.Package         as Pkg
 import qualified System.APT.Package.Control as Ctl
 import           System.APT.Types
@@ -54,18 +55,32 @@ main = defaultMain $ testGroup "apteryx"
 
     , testGroup "deserialise package description"
         [ testCase "package name" $
-            fromControl entName "libvarnishapi1"
+            control entName "libvarnishapi1"
+
+        , testCase "version number" $
+            control entVers (Vers "0.1.0+123~1" [0, 1, 0, 123, 1])
+
+        , testCase "amd64 architecture" $
+            control entArch Amd64
         ]
+
+    , testCase "descending version ordering" $
+        let mk = Vers ""
+            a  = mk [0]
+            b  = mk [0, 1, 0, 123, 1]
+            c  = mk [1, 2, 3]
+            d  = mk [23, 0, 12, 0]
+         in [a, b, c, d] @=? sort [b, d, c, a]
     ]
 
 parse :: ByteString -> ByteString -> Assertion
 parse k v = Just v @=?
     ((hush . Ctl.parse $ k <> ": " <> v) >>= Map.lookup (CI.mk k))
 
-fromControl :: (Eq a, Show a) => (Package -> a) -> a -> Assertion
-fromControl f x = Right x @=? (f <$> g)
+control :: (Eq a, Show a) => (Entry () -> a) -> a -> Assertion
+control f x = Right x @=? (f <$> g)
   where
-    g = ($ s) <$> (Ctl.parse m >>= Pkg.fromControl)
+    g = Ctl.parse m >>= Pkg.fromControl
 
     m = "Package: libvarnishapi1\n\
         \Version: 0.1.0+123~1\n\
@@ -74,5 +89,3 @@ fromControl f x = Right x @=? (f <$> g)
         \Depends: runit\n\
         \Description: A brief synopsis about the package\n\
         \ A continued and expand description about the package.\n"
-
-    s = Stat undefined undefined undefined undefined
