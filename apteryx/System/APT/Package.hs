@@ -17,6 +17,7 @@ module System.APT.Package
     (
     -- * Deserialisation
       fromFile
+    , fromControl
     , fromHeaders
 
     -- * Serialisation
@@ -42,18 +43,17 @@ import           Data.ByteString.From             (FromByteString)
 import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.CaseInsensitive             (CI)
 import qualified Data.CaseInsensitive             as CI
-import           Data.Char                        (isAlpha)
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
+import qualified Data.Foldable                    as Fold
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
 import           Data.Monoid
 import           Network.HTTP.Types.Header
 import           System.APT.IO
+import qualified System.APT.Package.Control       as Ctl
 import           System.APT.Types
 import           System.IO                        (hClose)
-
--- FIXME: Description is not being parsed correctly
 
 fromFile :: MonadIO m
          => FilePath
@@ -62,19 +62,7 @@ fromFile :: MonadIO m
 fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
     catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
     bs <- runShell $ "ar -p " ++ path ++ " control.tar.gz | tar -Oxz ./control"
-    hoistEither (fields bs >>= fromControl) `ap` getFileStat path
-  where
-    fields = field (Map.fromList . map (first CI.mk)) parser
-
-    parser = many' $ (,)
-        <$> (takeWhile1 isAlpha <* char ':' <* many1 space)
-        <*> (BS.pack <$> manyTill anyChar end)
-
-    end = (`unless` fail "") =<< choice
-        [ string "\n " >> return False
-        , endOfLine >> return True
-        , endOfInput >> return True
-        ]
+    hoistEither (Ctl.parse bs >>= fromControl) `ap` getFileStat path
 
 fromHeaders :: FromHeaders a => [Header] -> Either Error a
 fromHeaders = parseHeaders . Map.fromList . map (first stripPrefix)
@@ -107,6 +95,51 @@ instance ToIndex Package where
         , "Version: "      =@ entVers
         , "Architecture: " =@ entArch
         ] ++ toIndex entAnn
+
+instance ToIndex [Index] where
+    toIndex xs =
+        [ csum "MD5Sum:\n" statMD5
+        , csum "SHA1:\n"   statSHA1
+        , csum "SHA256:\n" statSHA256
+        ]
+      where
+        csum :: Builder -> (Stat -> Digest a) -> Builder
+        csum k f = mappend k $ Fold.foldMap (line f) xs
+
+        line :: (Stat -> Digest a) -> Index -> Builder
+        line f x = mconcat
+            [ " " =@ base16 (f $ idxStat x)
+            , pad =@ size
+            , " " =@ idxRel x
+            , "\n"
+            ]
+          where
+            pad  = bytes (replicate (1 + (maxl - len size)) ' ')
+            size = statSize (idxStat x)
+
+        maxl = len . Fold.maximum $ map (statSize . idxStat) xs
+        len  = truncate . (/ base) . log . fromIntegral
+
+        base :: Double
+        base = log 10
+
+instance ToIndex Release where
+    toIndex (Release org lbl arch) =
+        [ "Origin: "       =@ org
+        , "Label: "        =@ lbl
+        , "Architecture: " =@ arch
+        ]
+
+instance ToIndex InRelease where
+    toIndex InRelease{..} =
+        [ "Origin: "        =@ relOrigin
+        , "Label: "         =@ relLabel
+        , "Codename: "      =@ relCode
+        , "Date: "          =@ time relDate
+        , "Valid-Until: "   =@ time relUntil
+        , "Architectures: " =@ Map.keys relPkgs
+        , "Description: "   =@ relDesc
+        ]
 
 class FromControl a where
     fromControl :: Map (CI ByteString) ByteString -> Either Error a

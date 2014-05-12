@@ -33,7 +33,6 @@ import           Data.Conduit
 import qualified Data.Conduit.Binary       as Conduit
 import qualified Data.Conduit.Zlib         as Conduit
 import qualified Data.Foldable             as Fold
-import           Data.List                 (intersperse)
 import           Data.Map.Strict           (Map)
 import qualified Data.Map.Strict           as Map
 import           Data.Maybe
@@ -90,8 +89,8 @@ generate tmp dest r@InRelease{..} =
         let rel = path ++ "/Release"
 
         writef rel $ \hd -> do
-            hPutBuilder hd (bytes r)
-            hPutBuilder hd (bytes $ concat ids)
+            putBuilders hd (Pkg.toIndex r)
+            putBuilders hd (Pkg.toIndex $ concat ids)
 
         createDirectoryIfMissing True dest
 
@@ -108,10 +107,10 @@ generate tmp dest r@InRelease{..} =
         createDirectoryIfMissing True dir
 
         writef rel $ \hd ->
-            hPutBuilder hd (bytes $ Release relOrigin relLabel arch)
+            putBuilders hd (Pkg.toIndex $ Release relOrigin relLabel arch)
 
         writef pkg $ \hd ->
-            mapM_ (hPutBuilder hd . contents) (Set.toList ps)
+            putBuilders hd . concatMap contents $ Set.toList ps
 
         readf pkg $ \x ->
             writef pkgz $ \y ->
@@ -134,7 +133,7 @@ generate tmp dest r@InRelease{..} =
              +++ entName
              +++ "/"
              +++ entVers
-         in mconcat . intersperse "\n" $ Pkg.toIndex p ++ [f, "\n"]
+         in Pkg.toIndex p ++ [f, "\n"]
 
 -- FIXME: Move to a more relevant location
 
@@ -158,3 +157,6 @@ reindex Entry{..} host = liftIO $ do
         , "/"
         , toByteString (urlEncode entVers)
         ]
+
+putBuilders :: Handle -> [Builder] -> IO ()
+putBuilders hd = mapM_ (hPutBuilder hd . (<> "\n"))

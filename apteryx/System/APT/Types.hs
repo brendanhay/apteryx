@@ -38,15 +38,12 @@ import           Data.ByteString.From
 import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
-import qualified Data.CaseInsensitive             as CI
-import           Data.Char                        (toUpper)
-import qualified Data.Foldable                    as Fold
 import           Data.Int
 import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
-import qualified Data.Map.Strict                  as Map
 import           Data.Monoid                      hiding (All)
 import           Data.Set                         (Set)
+import           Data.String
 import           Data.Text                        (Text)
 import qualified Data.Text                        as Text
 import           Data.Text.Buildable
@@ -85,20 +82,24 @@ instance ToURL Text where
         . mconcat
         . map f
         . Text.unpack
-      where
+       where
         f c | c == '+'  = "%2B"
             | c == ' '  = "%20"
             | otherwise = LBuild.singleton c
 
 data Error where
     Exception :: SomeException -> Error
-    Error     :: ToBytes a => Status -> a -> Error
+    Error     :: Status -> Builder -> Error
 
 deriving instance Typeable Error
 
+-- FIXME:
+instance Eq Error where
+    (==) a b = show a == show b
+
 instance Show Error where
     show (Exception ex) = show ex
-    show (Error    s m) = show s ++ " " ++ show (toByteString m)
+    show (Error    s b) = show s ++ " " ++ show (toByteString b)
 
 instance Exception Error
 
@@ -106,15 +107,16 @@ instance ToError Error where
     toError (Exception ex) = toError ex
     toError e              = toError (show e)
 
-missingPackage, missingField, invalidField, awsError, shellError
+invalidPackage, missingPackage, missingField, invalidField, awsError, shellError
     :: ToBytes a
     => a
     -> Error
-missingPackage = Error status409
-missingField   = Error status409
-invalidField   = Error status413
-awsError       = Error status500
-shellError     = Error status500
+invalidPackage = Error status409 . mappend "Invalid package: " . bytes
+invalidField   = Error status409 . mappend "Invalid field: " . bytes
+missingPackage = Error status409 . mappend "Missing package: " . bytes
+missingField   = Error status409 . mappend "Missing field: " . bytes
+awsError       = Error status500 . mappend "AWS error: " . bytes
+shellError     = Error status500 . mappend "Shell error: " . bytes
 
 data Bucket = Bucket !Text (Maybe Text)
     deriving (Eq, Show)
@@ -141,7 +143,7 @@ instance Buildable Key where
     build = build . urlEncode
 
 newtype Name = Name { unName :: ByteString }
-    deriving (Eq, Ord, Show, ToBytes)
+    deriving (Eq, Ord, Show, ToBytes, IsString)
 
 instance FromByteString Name where
     parser = Name <$> takeWhile1 (/= '_')
@@ -264,41 +266,8 @@ data Index = Index
 
 instance NFData Index
 
-instance ToBytes [Index] where
-    bytes xs =
-           csum "MD5Sum:\n" statMD5
-        <> csum "SHA1:\n"   statSHA1
-        <> csum "SHA256:\n" statSHA256
-      where
-        csum :: Builder -> (Stat -> Digest a) -> Builder
-        csum k f = mappend k $ Fold.foldMap (line f) xs
-
-        line :: (Stat -> Digest a) -> Index -> Builder
-        line f x = mconcat
-            [ " " =@ base16 (f $ idxStat x)
-            , pad =@ size
-            , " " =@ idxRel x
-            , "\n"
-            ]
-          where
-            pad  = bytes (replicate (1 + (maxl - len size)) ' ')
-            size = statSize (idxStat x)
-
-        maxl = len . Fold.maximum $ map (statSize . idxStat) xs
-        len  = truncate . (/ base) . log . fromIntegral
-
-        base :: Double
-        base = log 10
-
 data Release = Release !Text !Text !Arch
     deriving (Eq, Show)
-
-instance ToBytes Release where
-    bytes (Release org lbl arch) = joinLines
-        [ "Origin: "       =@ org
-        , "Label: "        =@ lbl
-        , "Architecture: " =@ arch
-        ]
 
 data InRelease = InRelease
     { relOrigin :: !Text
@@ -325,17 +294,6 @@ mkInRelease org lbl code desc = \t ps -> InRelease
     , relPkgs   = ps
     }
 
-instance ToBytes InRelease where
-    bytes InRelease{..} = joinLines $
-        [ "Origin: "        =@ relOrigin
-        , "Label: "         =@ relLabel
-        , "Codename: "      =@ relCode
-        , "Date: "          =@ time relDate
-        , "Valid-Until: "   =@ time relUntil
-        , "Architectures: " =@ Map.keys relPkgs
-        , "Description: "   =@ relDesc
-        ]
-
 data Path
     = F !FilePath !FilePath
     | D !FilePath !FilePath
@@ -354,6 +312,3 @@ relative (D _ r) = r
 
 time :: UTCTime -> ByteString
 time = BS.pack . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S UTC"
-
-joinLines :: [Builder] -> Builder
-joinLines = Fold.foldMap (<> "\n")
