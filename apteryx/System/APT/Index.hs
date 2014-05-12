@@ -36,7 +36,7 @@ import qualified Data.Foldable             as Fold
 import           Data.Map.Strict           (Map)
 import qualified Data.Map.Strict           as Map
 import           Data.Maybe
-import           Data.Monoid
+import           Data.Monoid               hiding (All)
 import           Data.Set                  (Set)
 import qualified Data.Set                  as Set
 import           Data.Time
@@ -58,11 +58,12 @@ default (Builder)
 
 sync :: FilePath
      -> FilePath
+     -> [Arch]
      -> (UTCTime -> Map Arch (Set Package) -> InRelease)
      -> Store
      -> IO ()
-sync tmp dest ctor s = do
-    c <- latest ctor s >>= generate tmp dest
+sync tmp dest as ctor s = do
+    c <- latest ctor s >>= generate tmp dest as
     case c of
         ExitSuccess   -> return ()
         ExitFailure _ -> throwIO $
@@ -81,14 +82,21 @@ latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
             Left  e -> throwIO e
             Right p -> return $ Map.insertWith (<>) (entArch p) (Set.singleton p) m
 
-generate :: FilePath -> FilePath -> InRelease -> IO ExitCode
-generate tmp dest r@InRelease{..} =
+generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
+generate tmp dest as r@InRelease{..} =
     withTempDirectory tmp "apt." $ \path -> do
-        ids <- parMapM (release path) (Map.toList relPkgs)
+        let pkgs  = Map.union relPkgs $ Map.fromList (zip as (repeat mempty))
+            archs = fromMaybe mempty (Map.lookup All pkgs)
 
-        let rel = path ++ "/Release"
+            ps  | All `elem` as = pkgs
+                | otherwise     = Map.delete All pkgs
 
-        writef rel $ \hd -> do
+            f k | k `elem` as = (<> archs)
+                | otherwise   = id
+
+        ids <- parMapM (release path) (Map.toList $ Map.mapWithKey f ps)
+
+        writef (path ++ "/Release") $ \hd -> do
             putBuilders hd (Pkg.toIndex r)
             putBuilders hd (Pkg.toIndex $ concat ids)
 

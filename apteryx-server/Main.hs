@@ -137,7 +137,7 @@ options = Options
 
     <*> option
          ( long "versions"
-        <> short 'n'
+        <> short 'v'
         <> metavar "INT"
         <> help "Maximum number of most recent package versions to retain. [default: 3]"
         <> value 3
@@ -146,28 +146,28 @@ options = Options
     <*> some (fromOption
          ( long "arch"
         <> short 'a'
-        <> metavar "PATH"
-        <> help "Architectures that will be used for generating releases. [required]"
+        <> metavar "ARCH"
+        <> help "Architectures to union 'all' with. [required]"
          ))
 
     <*> textOption
          ( long "codename"
         <> short 'c'
-        <> metavar "PATH"
+        <> metavar "STR"
         <> help "Codename of the repository the server will respond to. [required]"
          )
 
     <*> textOption
          ( long "description"
         <> short 'd'
-        <> metavar "PATH"
+        <> metavar "STR"
         <> help "Description of the repository for each Release file. [required]"
          )
 
     <*> option
-         ( long "valid-until"
-        <> short 'v'
-        <> metavar "INT"
+         ( long "expiry"
+        <> short 'e'
+        <> metavar "HOURS"
         <> help "Hours in the future to set each Release's expiry to. [default: 3]"
         <> value 3
          )
@@ -382,7 +382,7 @@ sync f = do
     Env{..} <- ask
     let Options{..} = appOptions
         ctor        = mkInRelease optCode optDesc
-    catchError . f appLock $ Index.sync optTemp optWWW ctor appStore
+    catchError . f appLock $ Index.sync optTemp optWWW optArchs ctor appStore
 
 blank :: Response
 blank = plain status200 ""
