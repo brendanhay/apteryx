@@ -35,6 +35,7 @@ import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
+import           Data.Text (Text)
 import           Data.Time.Clock
 import           Data.Word
 import qualified Network.HTTP.Conduit        as HTTP
@@ -68,17 +69,12 @@ data Options = Options
     , optTemp     :: !FilePath
     , optWWW      :: !FilePath
     , optVersions :: !Int
+    , optArchs    :: [Arch]
+    , optCode     :: !Text
+    , optDesc     :: !Text
+    , optValid    :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
-
--- - Additional flags
---   Origin
---   Label
---   Codename/Distribution -- many
---   Valid-Until
---   Description
-
--- - InRelease signing
 
 -- architectures:
 --  remove all from InRelease
@@ -89,9 +85,6 @@ data Options = Options
 -- distributions:
 --  will generate a release for each distribution
 
--- component:
---  specify the name of the component to use
-
 -- archive:
 --  add to release indicies, should be same as the distribution name
 
@@ -101,14 +94,11 @@ data Options = Options
     -- Description-md5
     -- Description-$LANG
 
--- contents:
---  /dists/<dist>/<comp>/Contents-<arch>.gz
--- ar -p .deb | tar -ztf data.tar.gz
-
 options :: Parser Options
 options = Options
     <$> strOption
          ( long "host"
+        <> short 'H'
         <> metavar "HOST"
         <> help "Hostname or address to bind on. [default: 127.0.0.1]"
         <> value "127.0.0.1"
@@ -147,15 +137,43 @@ options = Options
 
     <*> option
          ( long "versions"
-        <> short 'v'
+        <> short 'n'
         <> metavar "INT"
         <> help "Maximum number of most recent package versions to retain. [default: 3]"
         <> value 3
          )
 
+    <*> some (fromOption
+         ( long "arch"
+        <> short 'a'
+        <> metavar "PATH"
+        <> help "Architectures that will be used for generating releases. [required]"
+         ))
+
+    <*> textOption
+         ( long "codename"
+        <> short 'c'
+        <> metavar "PATH"
+        <> help "Codename of the repository the server will respond to. [required]"
+         )
+
+    <*> textOption
+         ( long "description"
+        <> short 'd'
+        <> metavar "PATH"
+        <> help "Description of the repository for each Release file. [required]"
+         )
+
+    <*> option
+         ( long "valid-until"
+        <> short 'v'
+        <> metavar "INT"
+        <> help "Hours in the future to set each Release's expiry to. [default: 3]"
+        <> value 3
+         )
+
     <*> switch
          ( long "debug"
-        <> short 'd'
         <> help "Print debug output."
          )
 
@@ -363,7 +381,7 @@ sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
     Env{..} <- ask
     let Options{..} = appOptions
-        ctor        = mkInRelease "origin" "label" "codename" "description"
+        ctor        = mkInRelease optCode optDesc
     catchError . f appLock $ Index.sync optTemp optWWW ctor appStore
 
 blank :: Response

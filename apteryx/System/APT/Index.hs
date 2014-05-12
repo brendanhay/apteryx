@@ -107,7 +107,7 @@ generate tmp dest r@InRelease{..} =
         createDirectoryIfMissing True dir
 
         writef rel $ \hd ->
-            putBuilders hd (Pkg.toIndex $ Release relOrigin relLabel arch)
+            putBuilders hd . Pkg.toIndex $ Release relCode relOrigin relLabel arch
 
         writef pkg $ \hd ->
             putBuilders hd . concatMap contents $ Set.toList ps

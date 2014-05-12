@@ -12,9 +12,12 @@
 
 module System.APT.Options where
 
+import qualified Data.ByteString.Char8 as BS
+import           Data.ByteString.From  (FromByteString(..))
+import qualified Data.ByteString.From  as From
 import           Data.Monoid
-import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
+import           Data.Text             (Text)
+import qualified Data.Text             as Text
 import           GHC.Conc
 import           Options.Applicative
 import           System.APT.Types
@@ -27,6 +30,9 @@ parseOptions p = customExecParser
 
 textOption :: Mod OptionFields String -> Parser Text
 textOption = fmap Text.pack . strOption
+
+fromOption :: FromByteString a => Mod OptionFields a -> Parser a
+fromOption = nullOption . (eitherReader (From.runParser From.parser . BS.pack) <>)
 
 bucketOption :: Mod OptionFields String -> Parser Bucket
 bucketOption = fmap (mk . Text.pack) . strOption

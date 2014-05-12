@@ -124,8 +124,9 @@ instance ToIndex [Index] where
         base = log 10
 
 instance ToIndex Release where
-    toIndex (Release org lbl arch) =
-        [ "Origin: "       =@ org
+    toIndex (Release code org lbl arch) =
+        [ "Archive: "      =@ code
+        , "Origin: "       =@ org
         , "Label: "        =@ lbl
         , "Architecture: " =@ arch
         ]

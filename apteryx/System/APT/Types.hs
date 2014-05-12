@@ -266,7 +266,7 @@ data Index = Index
 
 instance NFData Index
 
-data Release = Release !Text !Text !Arch
+data Release = Release !Text !Text !Text !Arch
     deriving (Eq, Show)
 
 data InRelease = InRelease
@@ -281,12 +281,10 @@ data InRelease = InRelease
 
 mkInRelease :: Text
             -> Text
-            -> Text
-            -> Text
             -> (UTCTime -> Map Arch (Set Package) -> InRelease)
-mkInRelease org lbl code desc = \t ps -> InRelease
-    { relOrigin = org
-    , relLabel  = lbl
+mkInRelease code desc = \t ps -> InRelease
+    { relOrigin = "Apteryx"
+    , relLabel  = "Apteryx"
     , relCode   = code
     , relDesc   = desc
     , relDate   = t
