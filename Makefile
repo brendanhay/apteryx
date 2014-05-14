@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 FLAGS := --disable-documentation --disable-library-coverage
-DEPS  := vendor/amazonka
+DEPS  := vendor/amazonka vendor/bzlib-conduit
 
 .PHONY: build clean test lint
 
@@ -30,6 +30,9 @@ add-sources: cabal.sandbox.config $(DEPS)
 
 cabal.sandbox.config:
 	cabal sandbox init
+
+vendor/bzlib-conduit:
+	git clone https://github.com/snoyberg/bzlib-conduit.git $@
 
 vendor/%:
 	git clone https://github.com/brendanhay/$*.git $@

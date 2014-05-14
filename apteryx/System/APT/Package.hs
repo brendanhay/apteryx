@@ -25,35 +25,32 @@ module System.APT.Package
     , toHeaders
     ) where
 
-import qualified Codec.Compression.Zlib           as ZLib
-import           Control.Applicative              hiding (optional)
+import           Control.Applicative
 import           Control.Arrow
 import           Control.Error
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Crypto.Hash
-import           Data.Attoparsec.ByteString.Char8
-import           Data.ByteString                  (ByteString)
-import qualified Data.ByteString.Base16           as Base16
-import qualified Data.ByteString.Base64           as Base64
-import qualified Data.ByteString.Base64.Lazy      as LBase64
-import           Data.ByteString.Builder          (Builder)
-import qualified Data.ByteString.Char8            as BS
-import           Data.ByteString.From             (FromByteString)
-import qualified Data.ByteString.Lazy.Char8       as LBS
-import           Data.CaseInsensitive             (CI)
-import qualified Data.CaseInsensitive             as CI
+import           Data.ByteString            (ByteString)
+import qualified Data.ByteString.Base16     as Base16
+import qualified Data.ByteString.Base64     as Base64
+import           Data.ByteString.Builder    (Builder)
+import qualified Data.ByteString.Char8      as BS
+import           Data.Byteable
+import           Data.CaseInsensitive       (CI)
+import qualified Data.CaseInsensitive       as CI
 import           Data.Conduit
-import qualified Data.Conduit.Binary              as Conduit
-import qualified Data.Foldable                    as Fold
-import           Data.Map.Strict                  (Map)
-import qualified Data.Map.Strict                  as Map
+import qualified Data.Conduit.Binary        as Conduit
+import qualified Data.Foldable              as Fold
+import           Data.Map.Strict            (Map)
+import qualified Data.Map.Strict            as Map
 import           Data.Monoid
 import           Network.HTTP.Types.Header
+import           System.APT.Compression
 import           System.APT.IO
-import qualified System.APT.Package.Control       as Ctl
+import qualified System.APT.Package.Control as Ctl
 import           System.APT.Types
-import           System.IO                        (hClose)
+import           System.IO                  (hClose)
 
 fromFile :: MonadIO m
          => FilePath
@@ -77,16 +74,16 @@ instance (ToBytes k, ToBytes v) => ToIndex (Map (CI k) v) where
 
 instance ToIndex Stat where
     toIndex Stat{..} =
-        [ "MD5sum: " =@ base16 statMD5
-        , "SHA1: "   =@ base16 statSHA1
-        , "SHA256: " =@ base16 statSHA256
+        [ "MD5sum: " =@ fromDigest statMD5
+        , "SHA1: "   =@ fromDigest statSHA1
+        , "SHA256: " =@ fromDigest statSHA256
         , "Size: "   =@ statSize
         ]
 
 instance ToIndex Meta where
     toIndex Meta{..} =
-        [ "Description: "     =@ metaDesc
-        , "Description-md5: " =@ base16 (hash metaDesc :: Digest MD5)
+        [ "Description-md5: " =@ hashDesc metaDesc
+        , "Description: "     =@ metaDesc
         ] ++ toIndex metaStat
 
 instance ToIndex Package where
@@ -96,22 +93,27 @@ instance ToIndex Package where
         , "Architecture: " =@ entArch
         ] ++ toIndex entAnn
 
+instance ToIndex (Translate Package) where
+    toIndex (Translate Entry{..}) =
+        [ "Package: "         =@ entName
+        , "Description-md5: " =@ hashDesc (metaDesc entAnn)
+        , "Description: "     =@ metaDesc entAnn
+        ]
+
 instance ToIndex [Index] where
     toIndex xs =
-        [ csum "MD5Sum:\n" statMD5
-        , csum "SHA1:\n"   statSHA1
-        , csum "SHA256:\n" statSHA256
-        ]
+           csum "MD5Sum:" statMD5
+        ++ csum "SHA1:"   statSHA1
+        ++ csum "SHA256:" statSHA256
       where
-        csum :: Builder -> (Stat -> Digest a) -> Builder
-        csum k f = mappend k $ Fold.foldMap (line f) xs
+        csum :: Builder -> (Stat -> Digest a) -> [Builder]
+        csum k f = k : map (line f) xs
 
         line :: (Stat -> Digest a) -> Index -> Builder
         line f x = mconcat
-            [ " " =@ base16 (f $ idxStat x)
+            [ " " =@ fromDigest (f $ idxStat x)
             , pad =@ size
             , " " =@ idxRel x
-            , "\n"
             ]
           where
             pad  = bytes (replicate (1 + (maxl - len size)) ' ')
@@ -124,36 +126,30 @@ instance ToIndex [Index] where
         base = log 10
 
 instance ToIndex Release where
-    toIndex (Release code org lbl arch) =
-        [ "Origin: "       =@ org
-        , "Label: "        =@ lbl
-        , "Archive: "      =@ code
-        , "Architecture: " =@ arch
+    toIndex Release{..} =
+        [ "Origin: "       =@ relOrigin
+        , "Label: "        =@ relLabel
+        , "Archive: "      =@ relArchive
+        , "Architecture: " =@ relArch
         ]
 
 instance ToIndex InRelease where
     toIndex InRelease{..} =
-        [ "Origin: "        =@ relOrigin
-        , "Label: "         =@ relLabel
-        , "Codename: "      =@ relCode
-        , "Date: "          =@ time relDate
-        , "Valid-Until: "   =@ time relUntil
-        , "Architectures: " =@ Map.keys relPkgs
-        , "Description: "   =@ relDesc
+        [ "Origin: "        =@ inOrigin
+        , "Label: "         =@ inLabel
+        , "Codename: "      =@ inCode
+        , "Date: "          =@ time inDate
+        , "Valid-Until: "   =@ time inUntil
+        , "Architectures: " =@ Map.keys inPkgs
+        , "Description: "   =@ inDesc
         ]
 
 class FromControl a where
     fromControl :: Map (CI ByteString) ByteString -> Either Error a
 
 instance FromControl (Stat -> Meta) where
-    fromControl m = return $ Meta desc other
-      where
-        desc  = fromMaybe "" $ Map.lookup "description" m
-        other = Map.filterWithKey f $ restrict m
-
-        f "description"     _ = False
-        f "description-md5" _ = False
-        f _                 _ = True
+    fromControl m = return $
+        Meta (restrict m) (Desc $ Map.findWithDefault "" "description" m)
 
 instance FromControl (Stat -> Package) where
     fromControl m = do
@@ -163,84 +159,112 @@ instance FromControl (Stat -> Package) where
 
 instance FromControl (Entry ()) where
     fromControl m = Entry
-        <$> require "package" m
-        <*> require "version" m
-        <*> require "architecture" m
+        <$> (Name <$> require "package" m)
+        <*> (require "version" m >>= fromByteString)
+        <*> (require "architecture" m >>= fromByteString)
         <*> pure ()
 
 class ToHeaders a where
     toHeaders :: a -> [Header]
 
-instance ToBytes v => ToHeaders (Map (CI ByteString) v) where
-    toHeaders = map (uncurry (=:)) . Map.toList
+instance ToHeaders (Map (CI ByteString) ByteString) where
+    toHeaders = map (first $ mappend prefix) . Map.toList . restrict
+
+instance ToHeaders (Digest MD5) where
+    toHeaders = single "content-md5" . fromDigest
+
+instance ToHeaders (Digest SHA1) where
+    toHeaders = single (prefix <> hSHA1) . fromDigest
+
+instance ToHeaders (Digest SHA256) where
+    toHeaders = single (prefix <> hSHA256) . fromDigest
 
 instance ToHeaders Stat where
     toHeaders Stat{..} =
-        [ "content-md5"  =- base64 statMD5
-        , "content-type" =- ("application/x-deb" :: ByteString)
-        , hSHA1          =: base64 statSHA1
-        , hSHA256        =: base64 statSHA256
-        ]
+           ("content-type", "application/x-deb")
+         : toHeaders statMD5
+        ++ toHeaders statSHA1
+        ++ toHeaders statSHA256
+
+instance ToHeaders Desc where
+    toHeaders = single (prefix <> hDesc) . Base64.encode . compressBS . unDesc
 
 instance ToHeaders Meta where
     toHeaders Meta{..} =
-        (hDesc =: gz) : toHeaders metaOther ++ toHeaders metaStat
-      where
-        gz = LBase64.encode . ZLib.compress $ LBS.fromStrict metaDesc
+           toHeaders metaDesc
+        ++ toHeaders metaOther
+        ++ toHeaders metaStat
+
+instance ToHeaders Name where
+    toHeaders = single (prefix <> hName) . unName
+
+instance ToHeaders Vers where
+    toHeaders = single (prefix <> hVers) . verRaw
+
+instance ToHeaders Arch where
+    toHeaders = single (prefix <> hArch) . toByteString
 
 instance ToHeaders Package where
     toHeaders Entry{..} =
-        [ hName =: entName
-        , hVers =: entVers
-        , hArch =: toByteString entArch
-        ] ++ toHeaders entAnn
-
-(=-) :: ToBytes a => k -> a -> (k, ByteString)
-(=-) k = (k,) . toByteString
-
-(=:) :: ToBytes a => CI ByteString -> a -> (CI ByteString, ByteString)
-(=:) k = (CI.mk prefix <> k,) . toByteString
+           toHeaders entName
+        ++ toHeaders entVers
+        ++ toHeaders entArch
+        ++ toHeaders entAnn
 
 class FromHeaders a where
     parseHeaders :: Map (CI ByteString) ByteString -> Either Error a
 
+instance FromHeaders (Map (CI ByteString) ByteString) where
+    parseHeaders = Right . restrict
+
+instance FromHeaders Size where
+    parseHeaders = fromByteString <=< require "content-length"
+
+instance FromHeaders (Digest MD5) where
+    parseHeaders = toDigest . BS.init . BS.tail <=< require "etag"
+
+instance FromHeaders (Digest SHA1) where
+    parseHeaders = toDigest <=< require hSHA1
+
+instance FromHeaders (Digest SHA256) where
+    parseHeaders = toDigest <=< require hSHA256
+
 instance FromHeaders Stat where
     parseHeaders hs = Stat
-        <$> (require "content-length" hs >>= field Size decimal)
-        <*> digest "etag" etag
-        <*> digest hSHA1 b64
-        <*> digest hSHA256 b64
+        <$> parseHeaders hs
+        <*> parseHeaders hs
+        <*> parseHeaders hs
+        <*> parseHeaders hs
+
+instance FromHeaders Desc where
+    parseHeaders = fmap (Desc . decompressBS) . decode <=< require hDesc
       where
-        b64 = fmapL invalidField . Base64.decode
-
-        etag x | (y, "") <- Base16.decode . BS.init $ BS.tail x = Right y
-               | otherwise = Left (invalidField $ "Unable to decode ETag: " <> x)
-
-        msg = invalidField . mappend "Unable to read header: " . CI.original
-
-        digest k f = do
-            x <- require k hs
-            either Left
-                   (note (msg k) . digestFromByteString)
-                   (f x)
+        decode = fmapL (invalidField . BS.pack) . Base64.decode
 
 instance FromHeaders Meta where
-    parseHeaders hs = Meta desc other <$> parseHeaders hs
-      where
-        desc = LBS.toStrict
-            . ZLib.decompress
-            . LBS.fromStrict
-            . fromMaybe ""
-            $ Map.lookup hDesc hs >>= hush . Base64.decode
+    parseHeaders hs = Meta
+        <$> parseHeaders hs
+        <*> parseHeaders hs
+        <*> parseHeaders hs
 
-        other = Map.filterWithKey (\k _ -> k /= hDesc) (restrict hs)
+instance FromHeaders Name where
+    parseHeaders = fromByteString <=< require hName
+
+instance FromHeaders Vers where
+    parseHeaders = fromByteString <=< require hVers
+
+instance FromHeaders Arch where
+    parseHeaders = fromByteString <=< require hArch
 
 instance FromHeaders Package where
     parseHeaders hs = Entry
-        <$> require hName hs
-        <*> require hVers hs
-        <*> require hArch hs
+        <$> parseHeaders hs
         <*> parseHeaders hs
+        <*> parseHeaders hs
+        <*> parseHeaders hs
+
+(=@) :: ToBytes a => Builder -> a -> Builder
+(=@) k = mappend k . bytes
 
 hName, hVers, hArch, hDesc, hSHA1, hSHA256 :: CI ByteString
 hName   = "n"
@@ -250,22 +274,29 @@ hDesc   = "d"
 hSHA1   = "1"
 hSHA256 = "256"
 
-require :: FromByteString a
-        => CI ByteString
-        -> Map (CI ByteString) ByteString
-        -> Either Error a
-require k m =
-    maybe (Left . missingField $ CI.original k)
-          fromByteString
-          (Map.lookup k m)
+require :: CI ByteString -> Map (CI ByteString) a -> Either Error a
+require k = note (missingField $ CI.original k) . Map.lookup k
 
-field :: (a -> b) -> Parser a -> ByteString -> Either Error b
-field f p = fmapL (invalidField . BS.pack) . fmap f . parseOnly p
+single :: k -> v -> [(k, v)]
+single k = (:[]) . (k,)
 
-restrict :: Map (CI ByteString) ByteString -> Map (CI ByteString) ByteString
-restrict = Map.filterWithKey (\k _ -> k `elem` optional)
+toDigest :: HashAlgorithm a => ByteString -> Either Error (Digest a)
+toDigest bs
+    | (x, "") <- Base16.decode bs = note msg (digestFromByteString x)
+    | otherwise                   = Left msg
   where
-    optional =
+    msg = invalidField $ "Unable to decode digest: " <> bs
+
+fromDigest :: Digest a -> ByteString
+fromDigest = Base16.encode . toBytes
+
+hashDesc :: Desc -> Builder
+hashDesc d = bytes $ fromDigest (hash (unDesc d) :: Digest MD5)
+
+restrict :: Map (CI ByteString) a -> Map (CI ByteString) a
+restrict = Map.filterWithKey (\k _ -> k `elem` keys)
+  where
+    keys =
         [ "source"
         , "section"
         , "priority"
@@ -273,18 +304,18 @@ restrict = Map.filterWithKey (\k _ -> k `elem` optional)
         , "depends"
         , "installed-size"
         , "maintainer"
-        , "description"
-        , "description-md5"
         , "homepage"
         , "built-using"
         , "package-type"
         ]
 
 stripPrefix :: CI ByteString -> CI ByteString
-stripPrefix = CI.map f
+stripPrefix bs
+    | p `BS.isPrefixOf` CI.foldedCase bs = CI.map f bs
+    | otherwise = bs
   where
-    f x | prefix `BS.isPrefixOf` x = BS.drop (BS.length prefix) x
-        | otherwise                      = x
+    f = BS.drop (BS.length p)
+    p = CI.foldedCase prefix
 
-prefix :: ByteString
+prefix :: CI ByteString
 prefix = "x-amz-meta-"

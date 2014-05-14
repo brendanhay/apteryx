@@ -29,14 +29,11 @@ import           Control.Exception
 import           Crypto.Hash
 import           Data.Attoparsec.ByteString.Char8 hiding (D)
 import           Data.ByteString                  (ByteString)
-import qualified Data.ByteString.Base16           as Base16
-import qualified Data.ByteString.Base64           as Base64
 import           Data.ByteString.Builder          (Builder)
 import qualified Data.ByteString.Builder          as Build
 import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From
 import qualified Data.ByteString.Lazy.Char8       as LBS
-import           Data.Byteable
 import           Data.CaseInsensitive             (CI)
 import           Data.Int
 import           Data.List                        (intersperse)
@@ -66,12 +63,6 @@ toByteString = LBS.toStrict . Build.toLazyByteString . bytes
 
 fromByteString :: FromByteString a => ByteString -> Either Error a
 fromByteString = fmapL (invalidField . BS.pack) . runParser parser
-
-base16 :: Digest a -> ByteString
-base16 = Base16.encode . toBytes
-
-base64 :: Digest a -> ByteString
-base64 = Base64.encode . toBytes
 
 class ToURL a where
     urlEncode :: a -> Text
@@ -179,38 +170,69 @@ data Arch
     = All
     | Amd64
     | I386
+    | ArmEL
+    | ArmHF
+    | HurdI386
+    | KFree64
+    | KFreeI386
+    | Mips
+    | MipsEL
+    | PowerPC
+    | S390X
+    | Sparc
       deriving (Eq, Ord)
 
 instance NFData Arch
 
 instance Show Arch where
-    show = LBS.unpack . Build.toLazyByteString . bytes
+    show = BS.unpack . toByteString
 
 instance ToBytes Arch where
-    bytes All = "all"
-    bytes Amd64 = "amd64"
-    bytes I386  = "i386"
+    bytes All       = "all"
+    bytes Amd64     = "amd64"
+    bytes I386      = "i386"
+    bytes ArmEL     = "armel"
+    bytes ArmHF     = "armhf"
+    bytes HurdI386  = "hurd-i386"
+    bytes KFree64   = "kfreebsd-amd64"
+    bytes KFreeI386 = "kfreebsd-i386"
+    bytes Mips      = "mips"
+    bytes MipsEL    = "mipsel"
+    bytes PowerPC   = "powerpc"
+    bytes S390X     = "s390x"
+    bytes Sparc     = "sparc"
 
 instance ToBytes [Arch] where
     bytes = mconcat . intersperse " " . map bytes
 
 instance Buildable Arch where
-    build All = "all"
-    build Amd64 = "amd64"
-    build I386  = "i386"
+    build = build . Text.decodeUtf8 . toByteString
 
 instance FromByteString Arch where
-    parser = optional (string "binary-") >> all <|> amd64 <|> i386
-      where
-        all   = string "all"   >> return All
-        amd64 = string "amd64" >> return Amd64
-        i386  = string "i386"  >> return I386
+    parser = optional (string "binary-") >> choice
+        [ string "all"            >> return All
+        , string "amd64"          >> return Amd64
+        , string "i386"           >> return I386
+        , string "armel"          >> return ArmEL
+        , string "armhf"          >> return ArmHF
+        , string "hurd-i386"      >> return HurdI386
+        , string "kfreebsd-amd64" >> return KFree64
+        , string "kfreebsd-i386"  >> return KFreeI386
+        , string "mips"           >> return Mips
+        , string "mipsel"         >> return MipsEL
+        , string "powerpc"        >> return PowerPC
+        , string "s390x"          >> return S390X
+        , string "sparc"          >> return Sparc
+        ]
 
 newtype Size = Size { unSize :: Int64 }
     deriving (Eq, Ord, Show, Enum, Real, Num, Integral)
 
 instance ToBytes Size where
     bytes = Build.int64Dec . unSize
+
+instance FromByteString Size where
+    parser = Size <$> decimal
 
 data Stat = Stat
     { statSize   :: !Size
@@ -221,9 +243,15 @@ data Stat = Stat
 
 instance NFData Stat
 
+newtype Desc = Desc { unDesc :: ByteString }
+    deriving (Eq, Ord, Show)
+
+instance ToBytes Desc where
+    bytes = bytes . unDesc
+
 data Meta = Meta
-    { metaDesc  :: !ByteString
-    , metaOther :: Map (CI ByteString) ByteString
+    { metaOther :: Map (CI ByteString) ByteString
+    , metaDesc  :: !Desc
     , metaStat  :: !Stat
     } deriving (Eq, Ord, Show)
 
@@ -259,37 +287,44 @@ instance FromByteString Object where
             <*> parser <* string (Text.encodeUtf8 debExt)
             <*> pure (Key $ Text.decodeUtf8 k)
 
+newtype Translate a = Translate a
+
 data Index = Index
     { idxRel  :: !FilePath
     , idxStat :: !Stat
-    } deriving (Eq, Show)
+    } deriving (Eq, Ord, Show)
 
 instance NFData Index
 
-data Release = Release !Text !Text !Text !Arch
-    deriving (Eq, Show)
+data Release = Release
+    { relOrigin  :: !Text
+    , relLabel   :: !Text
+    , relArchive :: !Text
+    , relArch    :: !Arch
+    } deriving (Eq, Show)
 
 data InRelease = InRelease
-    { relOrigin :: !Text
-    , relLabel  :: !Text
-    , relCode   :: !Text
-    , relDesc   :: !Text
-    , relDate   :: !UTCTime
-    , relUntil  :: !UTCTime
-    , relPkgs   :: Map Arch (Set Package)
+    { inOrigin :: !Text
+    , inLabel  :: !Text
+    , inCode   :: !Text
+    , inDesc   :: !Text
+    , inDate   :: !UTCTime
+    , inUntil  :: !UTCTime
+    , inPkgs   :: Map Arch (Set Package)
     } deriving (Eq, Show)
 
 mkInRelease :: Text
             -> Text
+            -> Int
             -> (UTCTime -> Map Arch (Set Package) -> InRelease)
-mkInRelease code desc = \t ps -> InRelease
-    { relOrigin = "Apteryx"
-    , relLabel  = "Apteryx"
-    , relCode   = code
-    , relDesc   = desc
-    , relDate   = t
-    , relUntil  = (60 * 60) `addUTCTime` t
-    , relPkgs   = ps
+mkInRelease code desc h = \t ps -> InRelease
+    { inOrigin = "Apteryx"
+    , inLabel  = "Apteryx"
+    , inCode   = code
+    , inDesc   = desc
+    , inDate   = t
+    , inUntil  = h `addTime` t
+    , inPkgs   = ps
     }
 
 data Path
@@ -305,8 +340,8 @@ relative :: Path -> FilePath
 relative (F _ r) = r
 relative (D _ r) = r
 
-(=@) :: ToBytes a => Builder -> a -> Builder
-(=@) k = mappend k . bytes
-
 time :: UTCTime -> ByteString
 time = BS.pack . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S UTC"
+
+addTime :: Int -> UTCTime -> UTCTime
+addTime h = addUTCTime (realToFrac $ h * 60 * 60)

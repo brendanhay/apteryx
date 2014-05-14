@@ -29,12 +29,13 @@ library
         -Wall
 
     exposed-modules:
-          System.APT.IO
+          System.APT.Compression
+        , System.APT.IO
+        , System.APT.Index
         , System.APT.Log
         , System.APT.Options
         , System.APT.Package
         , System.APT.Package.Control
-        , System.APT.Index
         , System.APT.Store
         , System.APT.Types
 
@@ -50,6 +51,8 @@ library
         , byteable
         , bytestring           >= 0.10.4
         , bytestring-from
+        , bzlib
+        , bzlib-conduit
         , case-insensitive
         , conduit              >= 0.1.1
         , conduit-extra
@@ -69,6 +72,7 @@ library
         , old-locale
         , optparse-applicative
         , process
+        , resourcet
         , stm
         , temporary
         , text
@@ -77,37 +81,22 @@ library
         , tinylog              >= 0.8
         , transformers
         , unix
-        , zlib
 
--- executable apteryx-build
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-build
---     default-language:   Haskell2010
---     ghc-options:        -Wall -threaded -with-rtsopts=-N
+executable apteryx-build
+    main-is:            Main.hs
+    hs-source-dirs:     apteryx-build
+    default-language:   Haskell2010
+    ghc-options:        -Wall -threaded -with-rtsopts=-N
 
---     build-depends:
---           amazonka
---         , async
---         , apteryx
---         , base
---         , bytestring
---         , optparse-applicative
---         , text
---         , transformers
-
--- executable apteryx-upload
---     main-is:            Main.hs
---     hs-source-dirs:     apteryx-upload
---     default-language:   Haskell2010
---    ghc-options:        -Wall -threaded -with-rtsopts=-N
---     build-depends:
---           apteryx
---         , base
---         , bytestring
---         , conduit-extra
---         , either
---         , exceptions
---         , optparse-applicative
+    build-depends:
+          amazonka
+        , async
+        , apteryx
+        , base
+        , bytestring
+        , optparse-applicative
+        , text
+        , transformers
 
 executable apteryx-server
     main-is:            Main.hs
@@ -138,19 +127,33 @@ executable apteryx-server
         , wai-routing
         , warp
 
-test-suite tests
-    default-language:   Haskell2010
-    type:               exitcode-stdio-1.0
-    hs-source-dirs:     test
-    main-is:            Main.hs
-    ghc-options:        -Wall -threaded -with-rtsopts=-N
+-- executable apteryx-upload
+--     main-is:            Main.hs
+--     hs-source-dirs:     apteryx-upload
+--     default-language:   Haskell2010
+--    ghc-options:        -Wall -threaded
+--     build-depends:
+--           apteryx
+--         , base
+--         , bytestring
+--         , conduit-extra
+--         , either
+--         , exceptions
+--         , optparse-applicative
 
-    build-depends:
-          apteryx
-        , base
-        , bytestring
-        , case-insensitive
-        , containers
-        , errors
-        , tasty
-        , tasty-hunit
+-- test-suite tests
+--     default-language:   Haskell2010
+--     type:               exitcode-stdio-1.0
+--     hs-source-dirs:     test
+--     main-is:            Main.hs
+--     ghc-options:        -Wall -threaded -with-rtsopts=-N
+
+--     build-depends:
+--           apteryx
+--         , base
+--         , bytestring
+--         , case-insensitive
+--         , containers
+--         , errors
+--         , tasty
+--         , tasty-hunit

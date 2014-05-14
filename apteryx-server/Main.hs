@@ -28,14 +28,14 @@ import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
 import           Control.Monad.Trans.Either
-import           Data.ByteString             (ByteString)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
 import           Data.Maybe
 import           Data.Monoid
 import           Data.String
-import           Data.Text (Text)
+import           Data.Text                   (Text)
+import qualified Data.Text.Encoding          as Text
 import           Data.Time.Clock
 import           Data.Word
 import qualified Network.HTTP.Conduit        as HTTP
@@ -48,6 +48,7 @@ import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
 import           Options.Applicative
 import           Prelude                     hiding (concatMap, head, log)
+import           System.APT.Compression
 import           System.APT.IO
 import qualified System.APT.Index            as Index
 import           System.APT.Log
@@ -72,7 +73,7 @@ data Options = Options
     , optArchs    :: [Arch]
     , optCode     :: !Text
     , optDesc     :: !Text
-    , optValid    :: !Int
+    , optExpires  :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
 
@@ -89,7 +90,7 @@ data Options = Options
 --  add to release indicies, should be same as the distribution name
 
 -- translations:
---  /dists/<dist>/i18n/Translation-en.gz
+--  /dists/<dist>/i18n/Translation-en.<ext>
     -- Package
     -- Description-md5
     -- Description-$LANG
@@ -161,15 +162,16 @@ options = Options
          ( long "description"
         <> short 'd'
         <> metavar "STR"
-        <> help "Description of the repository for each Release file. [required]"
+        <> help "Description of the repository for each Release file. [default]"
+        <> value "A Magical APT Server"
          )
 
     <*> option
          ( long "expiry"
         <> short 'e'
         <> metavar "HOURS"
-        <> help "Hours in the future to set each Release's expiry to. [default: 3]"
-        <> value 3
+        <> help "Hours in the future to set each Release's expiry to. [default: 1]"
+        <> value 1
          )
 
     <*> switch
@@ -250,7 +252,7 @@ serve o@Options{..} = do
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
     middleware e = logRequest (appLogger e) . GZip.gzip GZip.def $ handler e
-    handler    e = runHandler e . route (prepare routes)
+    handler    e = runHandler e . route (prepare $ routes optCode)
 
     settings e =
           setHost (fromString optHost)
@@ -267,8 +269,11 @@ serve o@Options{..} = do
 
     serverError = plain status500 "server-error\n"
 
-routes :: Routes a (EitherT Error App) ()
-routes = do
+routes :: Text -> Routes a (EitherT Error App) ()
+routes c = do
+    get   "/i/status" (const $ return blank) true
+    head  "/i/status" (const $ return blank) true
+
     post  "/packages" (const triggerRebuild) true
 
     get   "/packages/:arch/:name/:vers" getPackage
@@ -282,26 +287,20 @@ routes = do
         .&. capture "name"
         .&. capture "vers"
 
-    get "/dists/:dist/InRelease" (getIndex "InRelease")
-         $ capture "dist"
+    dist "Release"
+    dist ("i18n/Translation-en" <.> compressExt)
 
-    get "/dists/:dist/Release" (getIndex "Release")
-         $ capture "dist"
+    arch "Release"
+    arch "Packages"
+    arch ("Packages" <.> compressExt)
+  where
+    dist x = get ("/dists/" <> code <> "/" <> fromString x)
+         (getIndex x) request
 
-    get "/dists/:dist/s3/:arch/Packages" (getArch "Packages")
-         $  capture "dist"
-        .&. capture "arch"
+    arch x = get ("/dists/" <> code <> "/s3/:arch/" <> fromString x)
+         (getArch x) $ capture "arch" .&. request
 
-    get "/dists/:dist/s3/:arch/Packages.gz" (getArch "Packages.gz")
-         $  capture "dist"
-        .&. capture "arch"
-
-    get "/dists/:dist/s3/:arch/Release" (getArch "Release")
-         $  capture "dist"
-        .&. capture "arch"
-
-    get  "/i/status" (const $ return blank) true
-    head "/i/status" (const $ return blank) true
+    code = Text.encodeUtf8 c
 
 getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
@@ -329,8 +328,10 @@ getPackage (a ::: n ::: v ::: rq) = do
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
     s <- asks appStore
+
     let x' = mkEntry n v a
         x  = Store.toKey x' s
+
     sayT name "Searching for {}" [x]
     Store.metadata x' s >>= either (const $ missing x) (const $ found x)
   where
@@ -366,22 +367,36 @@ triggerRebuild = sync lock >>= respond
                   return True)
               m
 
-getIndex :: FilePath -> ByteString -> Handler
-getIndex f _ = do
-    path <- (</> f) <$> asks (optWWW . appOptions)
-    p    <- catchError (doesFileExist path)
+getIndex :: FilePath -> Request -> Handler
+getIndex f rq = do
+    Options{..} <- asks appOptions
+
+    -- FIXME:
+    -- Have a date inside the appLock? Can be used to set the expires/cache-control
+    -- headers to be the same as internal to the Valid-Until Release field
+
+    let path  = optWWW </> f
+        hs    = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
+                , ("Pragma",        "no-cache")
+                , ("Expires",       "0")
+                ]
+
+    p <- catchError (doesFileExist path)
+
     return $ if p
-       then responseFile status200 [] path Nothing
+       then responseFile status200 hs path Nothing
        else plain status404 "not-found\n"
 
-getArch :: FilePath -> ByteString ::: Arch -> Handler
-getArch f (d ::: a) = getIndex ("binary-" ++ show a </> f) d
+getArch :: FilePath -> Arch ::: Request -> Handler
+getArch f (a ::: rq) = getIndex ("binary-" ++ show a </> f) rq
 
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
     Env{..} <- ask
+
     let Options{..} = appOptions
-        ctor        = mkInRelease optCode optDesc
+        ctor        = mkInRelease optCode optDesc optExpires
+
     catchError . f appLock $ Index.sync optTemp optWWW optArchs ctor appStore
 
 blank :: Response

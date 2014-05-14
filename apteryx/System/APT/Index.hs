@@ -1,6 +1,7 @@
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
+
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -- Module      : System.APT.Index
@@ -23,35 +24,39 @@ module System.APT.Index
     , reindex
     ) where
 
+import           Control.Monad.Trans.Resource     (runResourceT)
 import           Control.Applicative
-import           Control.Exception         (throwIO)
+import           Control.Exception                (throwIO)
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString.Builder
-import qualified Data.ByteString.Char8     as BS
+import qualified Data.ByteString.Char8            as BS
 import           Data.Conduit
-import qualified Data.Conduit.Binary       as Conduit
-import qualified Data.Conduit.Zlib         as Conduit
-import qualified Data.Foldable             as Fold
-import           Data.Map.Strict           (Map)
-import qualified Data.Map.Strict           as Map
+import qualified Data.Conduit.Binary              as Conduit
+import qualified Data.Conduit.List                as Conduit
+import qualified Data.Foldable                    as Fold
+import           Data.List                        (intersperse, sort)
+import           Data.Map.Strict                  (Map)
+import qualified Data.Map.Strict                  as Map
 import           Data.Maybe
-import           Data.Monoid               hiding (All)
-import           Data.Set                  (Set)
-import qualified Data.Set                  as Set
+import           Data.Monoid                      hiding (All)
+import           Data.Set                         (Set)
+import qualified Data.Set                         as Set
 import           Data.Time
-import           Network.HTTP.Conduit      hiding (path)
-import           Prelude                   hiding (lookup)
+import           Network.HTTP.Conduit             hiding (path)
+import           Prelude                          hiding (lookup)
+import           System.APT.Compression
 import           System.APT.IO
-import qualified System.APT.Package        as Pkg
-import           System.APT.Store          (Store)
-import qualified System.APT.Store          as Store
+import qualified System.APT.Package               as Pkg
+import           System.APT.Store                 (Store)
+import qualified System.APT.Store                 as Store
 import           System.APT.Types
 import           System.Directory
 import           System.Exit
+import           System.FilePath
 import           System.IO
 import           System.IO.Temp
-import           System.Logger.Message     ((+++))
+import           System.Logger.Message            ((+++))
 import           System.Process
 
 default (Builder)
@@ -85,63 +90,78 @@ latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
 generate tmp dest as r@InRelease{..} =
     withTempDirectory tmp "apt." $ \path -> do
-        let pkgs  = Map.union relPkgs $ Map.fromList (zip as (repeat mempty))
-            archs = fromMaybe mempty (Map.lookup All pkgs)
+        let i18n = path </> "i18n"
+            en   = i18n </> "Translation-en" <.> compressExt
 
-            ps  | All `elem` as = pkgs
-                | otherwise     = Map.delete All pkgs
+        createDirectoryIfMissing True i18n
 
-            f k | k `elem` as = (<> archs)
-                | otherwise   = id
+        -- i18n/Translation-en.<ext>
+        writeHandle en $ \hd -> runResourceT $
+            Conduit.sourceList packages
+                $= Conduit.concatMap (Set.toList . snd)
+                $= Conduit.map (joinBuilders . Pkg.toIndex . Translate)
+                $= Conduit.map ((<> "\n") . toByteString)
+                $= compressConduit
+                $$ Conduit.sinkHandle hd
 
-        ids <- parMapM (release path) (Map.toList $ Map.mapWithKey f ps)
+        ids <- (:)
+            <$> index path en
+            <*> (concat <$> parMapM (release path) packages)
 
-        writef (path ++ "/Release") $ \hd -> do
+        -- i18n/Release
+        writeHandle (path </> "Release") $ \hd -> do
             putBuilders hd (Pkg.toIndex r)
-            putBuilders hd (Pkg.toIndex $ concat ids)
+            putBuilders hd (Pkg.toIndex $ sort ids)
 
         createDirectoryIfMissing True dest
 
         diff path dest >>= mapM_ removePath
 
+        -- FIXME: Avoid shelling out?
         system $ "cp -rf " ++ path ++ "/* " ++ dest ++ "/"
   where
+    packages = Map.toList $ Map.mapWithKey filtered valid
+      where
+        valid
+            | All `elem` as = ps
+            | otherwise     = Map.delete All ps
+
+        filtered k
+            | k `elem` as = (<> fromMaybe mempty (Map.lookup All ps))
+            | otherwise   = id
+
+        ps = Map.union inPkgs $ Map.fromList (zip as (repeat mempty))
+
     release base (arch, ps) = liftIO $ do
-        let dir  = base ++ BS.unpack ("/binary-" <> toByteString arch)
-            rel  = dir ++ "/Release"
-            pkg  = dir ++ "/Packages"
-            pkgz = dir ++ "/Packages.gz"
+        let dir  = base </> BS.unpack ("binary-" <> toByteString arch)
+            rel  = dir  </> "Release"
+            pkg  = dir  </> "Packages"
+            pkgz = dir  </> "Packages" <.> compressExt
 
         createDirectoryIfMissing True dir
 
-        writef rel $ \hd ->
-            putBuilders hd . Pkg.toIndex $ Release relCode relOrigin relLabel arch
+        -- <arch>/Release
+        writeHandle rel $ \hd ->
+            putBuilders hd. Pkg.toIndex $ Release inCode inOrigin inLabel arch
 
-        writef pkg $ \hd ->
-            putBuilders hd . concatMap contents $ Set.toList ps
+        -- <arch>/Packages
+        writeHandle pkg $ \hd ->
+            mapM_ (putBuilders hd . contents) (Set.toList ps)
 
-        readf pkg $ \x ->
-            writef pkgz $ \y ->
-                Conduit.sourceHandle x $= Conduit.gzip $$ Conduit.sinkHandle y
+        -- <arch>/Packages.<ext>
+        readHandle pkg $ \x ->
+            writeHandle pkgz $ \y -> runResourceT $
+                Conduit.sourceHandle x
+                    $= compressConduit
+                    $$ Conduit.sinkHandle y
 
-        forM [rel, pkg, pkgz] $ \x ->
-            Index (drop (length base + 1) x) <$> getFileStat x
+        mapM (index base) [rel, pkg, pkgz]
 
-    writef p f = withFile p WriteMode $ \hd -> do
-        hSetBinaryMode hd True
-        hSetBuffering hd (BlockBuffering Nothing)
-        f hd
-
-    readf p = withFile p ReadMode
+    index base path = Index (drop (length base + 1) path) <$> getFileStat path
 
     contents p@Entry{..} =
-        let f = "Filename: packages/"
-             +++ entArch
-             +++ "/"
-             +++ entName
-             +++ "/"
-             +++ entVers
-         in Pkg.toIndex p ++ [f, "\n"]
+        let f = "Filename: /" +++ filename entArch entName entVers +++ "\n"
+         in Pkg.toIndex p ++ [f]
 
 -- FIXME: Move to a more relevant location
 
@@ -157,14 +177,24 @@ reindex Entry{..} host = liftIO $ do
     rq <- parseUrl (host <> url)
     void . withManager $ httpLbs (rq { method = "PATCH" })
   where
-    url = BS.unpack $ mconcat
-        [ "/packages/"
-        , toByteString entArch
-        , "/"
-        , toByteString entName
-        , "/"
-        , toByteString (urlEncode entVers)
-        ]
+    url = BS.unpack
+        . toByteString
+        $ filename entArch entName entVers
+
+filename :: Arch -> Name -> Vers -> Builder
+filename a n v = "packages/" +++ a +++ "/" +++ n +++ "/" +++ (urlEncode v)
 
 putBuilders :: Handle -> [Builder] -> IO ()
-putBuilders hd = mapM_ (hPutBuilder hd . (<> "\n"))
+putBuilders hd = hPutBuilder hd . joinBuilders
+
+joinBuilders :: [Builder] -> Builder
+joinBuilders = (<> "\n") . mconcat . intersperse "\n"
+
+writeHandle :: FilePath -> (Handle -> IO a) -> IO a
+writeHandle p f = withFile p WriteMode $ \hd -> do
+    hSetBinaryMode hd True
+    hSetBuffering hd (BlockBuffering Nothing)
+    f hd
+
+readHandle :: FilePath -> (Handle -> IO a) -> IO a
+readHandle p = withFile p ReadMode
