@@ -90,11 +90,6 @@ runShell cmd = do
         , std_err = CreatePipe
         }
 
-discoverAWSEnv :: (MonadThrow m, MonadIO m) => Bool -> m AWSEnv
-discoverAWSEnv dbg = liftIO $
-    runEitherT (loadAWSEnv AuthDiscover dbg)
-        >>= either (throwM . awsError) return
-
 catchError :: MonadIO m => IO a -> EitherT Error m a
 catchError = EitherT
     . liftIO
@@ -139,5 +134,5 @@ removePath p = exist f >>= (`when` rm f)
 
     f = absolute p
 
-parMapM :: (MonadIO m, NFData b) => (a -> IO b) -> [a] -> m [b]
-parMapM f = liftIO . Par.runParIO . Par.parMapM (liftIO . f)
+parMapM :: (MonadIO m, NFData b) => (a -> Par.ParIO b) -> [a] -> m [b]
+parMapM f = liftIO . Par.runParIO . Par.parMapM f

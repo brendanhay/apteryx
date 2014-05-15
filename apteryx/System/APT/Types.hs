@@ -98,6 +98,8 @@ instance ToError Error where
     toError (Exception ex) = toError ex
     toError e              = toError (show e)
 
+instance NFData Error
+
 invalidPackage, missingPackage, missingField, invalidField, awsError, shellError
     :: ToBytes a
     => a

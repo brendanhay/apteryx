@@ -24,11 +24,14 @@ module System.APT.Index
     , reindex
     ) where
 
-import           Control.Monad.Trans.Resource     (runResourceT)
+import Network.AWS (AWSError)
 import           Control.Applicative
-import           Control.Exception                (throwIO)
+import           Control.Arrow                    (first, second)
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Reader       (ask)
+import           Control.Monad.Trans.Resource     (runResourceT)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8            as BS
 import           Data.Conduit
@@ -65,27 +68,26 @@ sync :: FilePath
      -> FilePath
      -> [Arch]
      -> (UTCTime -> Map Arch (Set Package) -> InRelease)
-     -> Store
-     -> IO ()
-sync tmp dest as ctor s = do
-    c <- latest ctor s >>= generate tmp dest as
+     -> Store ()
+sync tmp dest as ctor = do
+    r <- latest ctor
+    c <- liftIO $ generate tmp dest as r
     case c of
         ExitSuccess   -> return ()
-        ExitFailure _ -> throwIO $
+        ExitFailure _ -> throwM $
             shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
 
-latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
-       -> Store
-       -> IO InRelease
-latest ctor s = ctor <$> getCurrentTime <*> (Store.entries s >>= par)
+latest :: (UTCTime -> Map Arch (Set Package) -> InRelease) -> Store InRelease
+latest ctor = do
+    e  <- ask
+    rs <- Store.entries >>= parMapM (foldM (meta e) mempty)
+    t  <- liftIO getCurrentTime
+    return $! ctor t (Map.unionsWith (<>) (map snd rs))
   where
-    par = fmap (Map.unionsWith (<>)) . parMapM (Fold.foldrM metadata mempty)
+    f e acc o = liftIO $ (`g` acc) <$> Store.run' e (Store.metadata o)
 
-    metadata o m = do
-        r <- Store.metadata o s
-        case r of
-            Left  e -> throwIO e
-            Right p -> return $ Map.insertWith (<>) (entArch p) (Set.singleton p) m
+    g (Left  l) = first  (l :)
+    g (Right x) = second (Map.insertWith (<>) (entArch x) (Set.singleton x))
 
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
 generate tmp dest as r@InRelease{..} =

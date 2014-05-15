@@ -16,7 +16,8 @@
 -- | Interface to the storage and retrieval of singular/plural artifacts from S3.
 module System.APT.Store
     ( Store
-    , runStore
+    , run
+    , run'
 
     , add
     , get
@@ -25,14 +26,13 @@ module System.APT.Store
     , metadata
     , presign
 
-    , toKey
+    , ToKey (..)
     ) where
 
 import           Control.Applicative
 import           Control.Error
 import           Control.Monad
 import           Control.Monad.Catch
-import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Control.Monad.Trans.Reader
 import           Data.ByteString           (ByteString)
@@ -71,18 +71,17 @@ bucketPrefix = bktPrefix <$> asks _bucket
 
 type Store = ReaderT Env AWS
 
-runStore :: (MonadThrow m, MonadIO m)
-         => Bucket  -- ^ S3 Bucket backing the store.
-         -> Int     -- ^ Number of most recent package versions to consider.
-         -> Bool    -- ^ Print debug output to stdout.
-         -> Store a -- ^ The computation to run.
-         -> m a
-runStore b v d s = liftIO $ do
-    e <- runEitherT (loadAWSEnv AuthDiscover d) >>= liftE
-    runAWSEnv e (runReaderT s (Env b v e)) >>= liftE
-  where
-    liftE :: (MonadThrow m, ToError e) => Either e a -> m a
-    liftE = either (throwM . toError) return
+run :: Bucket  -- ^ S3 Bucket backing the store.
+    -> Int     -- ^ Number of most recent package versions to consider.
+    -> Bool    -- ^ Print debug output to stdout.
+    -> Store a -- ^ The computation to run.
+    -> IO a
+run b v d s = runEitherT (loadAWSEnv AuthDiscover d)
+    >>= liftE
+    >>= (`run'` s) . Env b v
+
+run' :: Env -> Store a -> IO a
+run' e s = runAWSEnv (_aws e) (runReaderT s e) >>= liftE
 
 -- | Get a list of objects starting at the store's prefix,
 --   adhering to the version limit and returning a list ordered by version.
@@ -163,6 +162,9 @@ presign k t = lift =<< presignS3 GET
     <$> (Text.encodeUtf8 <$> bucketName)
     <*> (Text.encodeUtf8 <$> toKey k)
     <*> pure t
+
+liftE :: (MonadThrow m, ToError e) => Either e a -> m a
+liftE = either (throwM . toError) return
 
 class ToKey a where
     toKey :: a -> Store Text
