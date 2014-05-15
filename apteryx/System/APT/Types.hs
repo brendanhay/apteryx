@@ -272,15 +272,17 @@ type Package = Entry Meta
 stat :: Package -> Stat
 stat = metaStat . entAnn
 
+sizeOf :: Package -> Int64
+sizeOf = unSize . statSize . stat
+
 mkEntry :: Name -> Vers -> Arch -> Entry ()
 mkEntry n v a = Entry n v a ()
 
 instance FromByteString Object where
-    parser = do
-        k <- takeByteString
-        either (fail "Unable to parse Entry") return
-               (parseOnly (p k) (last $ BS.split '/' k))
+    parser = takeByteString >>= either (fail "Unable to parse Entry") return . f
       where
+        f k = parseOnly (p k) (last $ BS.split '/' k)
+
         p k = Entry
             <$> parser <* char '_'
             <*> parser <* char '_'
