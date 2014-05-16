@@ -19,6 +19,7 @@ module Main (main) where
 
 import           Control.Applicative
 import           Control.Concurrent
+import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString     (ByteString)
 import           Data.Monoid
@@ -91,32 +92,37 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
+    n           <- getProgName
+    e           <- getAWSEnv optDebug
 
-    n  <- getProgName
-    s  <- Store.new optFrom optVersions <$> discoverAWSEnv optDebug
+    Store.run optFrom optVersions e $ do
+        say n "Looking for entries in {}..." [optFrom]
+        xs <- concat <$> Store.entries
 
-    say n "Looking for entries in {}..." [optFrom]
-    xs <- concat <$> Store.entries s
+        mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
 
-    mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
+        say n "Copying to {}..." [optTo]
+        void $ Store.parMapM (go optTemp optTo) xs
 
-    say n "Copying to {}..." [optTo]
-    !_ <- parMapM (worker s optTemp optTo) xs
-
-    maybe (return ())
-          (\a -> say n "Triggering rebuild of {}" [a] >> Index.rebuild a)
-          optAddress
+    trigger optAddress
 
     say_ n "Done."
   where
-    worker s tmp dest o@Entry{..} = do
-        n <- Text.drop 9 . Text.pack . show <$> liftIO myThreadId
-        m <- Store.get o (liftEitherT . Pkg.fromFile tmp) s
+    go tmp dest o@Entry{..} = do
+        m <- Store.get o (liftEitherT . Pkg.fromFile tmp)
+        n <- thread
+
         say n "Retrieved {}" [entAnn]
 
-        maybe (say n "Unable to retrieve package from {}" [entAnn])
-              (\x -> do
-                  say n "Successfully read package description from {}" [entAnn]
-                  Store.copy o x dest s
-                  say n "Copied {} to {}" [build entAnn, build dest])
-              m
+        case m of
+            Nothing -> say n "Unable to retrieve package from {}" [entAnn]
+            Just x  -> do
+                say n "Successfully read package description from {}" [entAnn]
+                Store.copy o x dest
+                say n "Copied {} to {}" [build entAnn, build dest]
+
+    thread = Text.drop 9 . Text.pack . show <$> liftIO myThreadId
+
+    trigger Nothing  = return ()
+    trigger (Just x) =
+        say "server" "Triggering rebuild of {}" [x] >> Index.rebuild x

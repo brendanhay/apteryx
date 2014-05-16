@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeOperators              #-}
 
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
@@ -38,6 +39,7 @@ import           Data.Text                   (Text)
 import qualified Data.Text.Encoding          as Text
 import           Data.Time.Clock
 import           Data.Word
+import           Network.AWS
 import qualified Network.HTTP.Conduit        as HTTP
 import           Network.HTTP.ReverseProxy
 import           Network.HTTP.Types
@@ -180,22 +182,22 @@ options = Options
          )
 
 data Env = Env
-    { appOptions :: !Options
-    , appStore   :: !Store
-    , appLogger  :: !Logger
-    , appManager :: !HTTP.Manager
-    , appLock    :: MVar ()
+    { _options :: !Options
+    , _aws     :: !AWSEnv
+    , _logger  :: !Logger
+    , _manager :: !HTTP.Manager
+    , _lock    :: MVar ()
     }
 
 newEnv :: Options -> IO Env
 newEnv o@Options{..} = Env o
-    <$> (Store.new optKey optVersions <$> discoverAWSEnv optDebug)
+    <$> getAWSEnv optDebug
     <*> pure getLogger
     <*> HTTP.newManager HTTP.conduitManagerSettings
     <*> newMVar ()
 
 closeEnv :: Env -> IO ()
-closeEnv Env{..} = Log.close appLogger >> HTTP.closeManager appManager
+closeEnv Env{..} = Log.close _logger >> HTTP.closeManager _manager
 
 newtype App a = App { unApp :: ReaderT Env IO a }
     deriving ( Functor
@@ -212,7 +214,7 @@ runApp e = (`runReaderT` e) . unApp
 
 instance MonadLogger App where
     log l f = do
-        g <- asks appLogger
+        g <- asks _logger
         Log.log g l f
 
 instance MonadLogger (EitherT e App) where
@@ -251,14 +253,14 @@ serve o@Options{..} = do
     say_ "server" "Apteryx server starting..."
     runSettings (settings e) (middleware e) `finally` closeEnv e
   where
-    middleware e = logRequest (appLogger e) . GZip.gzip GZip.def $ handler e
+    middleware e = logRequest (_logger e) . GZip.gzip GZip.def $ handler e
     handler    e = runHandler e . route (prepare $ routes optCode)
 
     settings e =
           setHost (fromString optHost)
         . setPort (fromIntegral optPort)
-        . setBeforeMainLoop (logStart $ appLogger e)
-        . setOnException (logException $ appLogger e)
+        . setBeforeMainLoop (logStart $ _logger e)
+        . setOnException (logException $ _logger e)
         . setOnExceptionResponse (const serverError)
         $ defaultSettings
 
@@ -304,9 +306,9 @@ routes c = do
 
 getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
-    Env{..} <- ask
-    t       <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
-    u       <- Store.presign (Entry n v a ()) t appStore
+    e@Env{..} <- ask
+    t         <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
+    u         <- runStore e $ Store.presign (Entry n v a ()) t
 
     let (host, url) = BS.break (== '/') (BS.drop 8 u)
         (path, qry) = BS.break (== '?') url
@@ -323,27 +325,24 @@ getPackage (a ::: n ::: v ::: rq) = do
 
     sayT "proxy" "{}" [BS.unpack $ host <> path <> qry]
 
-    liftIO $ waiProxyTo (return . const f) defaultOnExc appManager rq
+    liftIO $ waiProxyTo (return . const f) defaultOnExc _manager rq
 
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
-    s <- asks appStore
-
-    let x' = mkEntry n v a
-        x  = Store.toKey x' s
-
-    sayT name "Searching for {}" [x]
-    Store.metadata x' s >>= either (const $ missing x) (const $ found x)
+    e <- ask
+    r <- runStore e $ Store.metadata etry
+    either (const missing) (const found) r
   where
-    missing x = do
-        sayT name "Unable to find package {}" [x]
+    missing = do
+        sayT name "Unable to find package {}" [etry]
         return $ plain status404 "not-found\n"
 
-    found x = do
-        sayT name "Found package {}, rebuilding local index" [x]
+    found = do
+        sayT name "Found package {}, rebuilding local index" [etry]
         sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
 
+    etry = mkEntry n v a
     name = "add-package"
 
 triggerRebuild :: Handler
@@ -369,10 +368,10 @@ triggerRebuild = sync lock >>= respond
 
 getIndex :: FilePath -> Request -> Handler
 getIndex f rq = do
-    Options{..} <- asks appOptions
+    Options{..} <- asks _options
 
     -- FIXME:
-    -- Have a date inside the appLock? Can be used to set the expires/cache-control
+    -- Have a date inside the _lock? Can be used to set the expires/cache-control
     -- headers to be the same as internal to the Valid-Until Release field
 
     let path  = optWWW </> f
@@ -392,12 +391,18 @@ getArch f (a ::: rq) = getIndex ("binary-" ++ show a </> f) rq
 
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
-    Env{..} <- ask
+    e@Env{..} <- ask
 
-    let Options{..} = appOptions
+    let Options{..} = _options
         ctor        = mkInRelease optCode optDesc optExpires
 
-    catchError . f appLock $ Index.sync optTemp optWWW optArchs ctor appStore
+    catchError . f _lock $
+        runStore e (Index.sync optTemp optWWW optArchs ctor) >>=
+            mapM_ (Log.debug _logger . msg . show)
+
+runStore :: MonadIO m => Env -> Store a -> m a
+runStore Env{..} = liftIO .
+    Store.run (optKey _options) (optVersions _options) _aws
 
 blank :: Response
 blank = plain status200 ""

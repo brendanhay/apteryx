@@ -24,20 +24,16 @@ module System.APT.Index
     , reindex
     ) where
 
-import Network.AWS (AWSError)
 import           Control.Applicative
 import           Control.Arrow                    (first, second)
 import           Control.Monad
-import           Control.Monad.Catch
 import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Reader       (ask)
 import           Control.Monad.Trans.Resource     (runResourceT)
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8            as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
 import qualified Data.Conduit.List                as Conduit
-import qualified Data.Foldable                    as Fold
 import           Data.List                        (intersperse, sort)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
@@ -68,26 +64,28 @@ sync :: FilePath
      -> FilePath
      -> [Arch]
      -> (UTCTime -> Map Arch (Set Package) -> InRelease)
-     -> Store ()
+     -> Store [Error]
 sync tmp dest as ctor = do
-    r <- latest ctor
-    c <- liftIO $ generate tmp dest as r
-    case c of
-        ExitSuccess   -> return ()
-        ExitFailure _ -> throwM $
-            shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
+    (es, r) <- latest ctor
+    c       <- liftIO $ generate tmp dest as r
+    return $! case c of
+        ExitSuccess   -> es
+        ExitFailure _ ->
+            shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) : es
 
-latest :: (UTCTime -> Map Arch (Set Package) -> InRelease) -> Store InRelease
+latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
+       -> Store ([Error], InRelease)
 latest ctor = do
-    e  <- ask
-    rs <- Store.entries >>= parMapM (foldM (meta e) mempty)
+    rs <- Store.entries >>= Store.parMapM (foldM f mempty)
     t  <- liftIO getCurrentTime
-    return $! ctor t (Map.unionsWith (<>) (map snd rs))
+    return ( concatMap fst rs
+           , ctor t (Map.unionsWith (<>) (map snd rs))
+           )
   where
-    f e acc o = liftIO $ (`g` acc) <$> Store.run' e (Store.metadata o)
+    f acc o = (`g` acc) <$> Store.metadata o
 
     g (Left  l) = first  (l :)
-    g (Right x) = second (Map.insertWith (<>) (entArch x) (Set.singleton x))
+    g (Right p) = second (Map.insertWith (<>) (entArch p) (Set.singleton p))
 
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
 generate tmp dest as r@InRelease{..} =
@@ -144,7 +142,7 @@ generate tmp dest as r@InRelease{..} =
 
         -- <arch>/Release
         writeHandle rel $ \hd ->
-            putBuilders hd. Pkg.toIndex $ Release inCode inOrigin inLabel arch
+            putBuilders hd . Pkg.toIndex $ Release inCode inOrigin inLabel arch
 
         -- <arch>/Packages
         writeHandle pkg $ \hd ->

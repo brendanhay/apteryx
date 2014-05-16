@@ -83,26 +83,26 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-
-    n <- getProgName
-
-    say_ n "Starting..."
+    n           <- getProgName
+    e           <- getAWSEnv optDebug
 
     let path = Path.encodeString optFile
 
     say n "Reading package description from {}" [path]
 
-    s <- Store.new optKey 1 <$> loadEnv optDebug
-    p <- withFile path ReadMode $ \hd ->
-        runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd) >>=
-            either throwM return
+    Store.run optKey 1 e $ do
+        p <- withFile path ReadMode $ \hd ->
+            runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd)
+                >>= either throwM return
 
-    say n "Uploading {} to {}" [build path, build optKey]
+        say n "Uploading {} to {}" [build path, build optKey]
 
-    Store.add p optFile s
+        Store.add p optFile
 
-    maybe (return ())
-          (\a -> say n "Triggering reindex of {}" [a] >> Index.reindex p a)
-          optAddress
+        trigger optAddress p
 
     say_ n "Done."
+  where
+    trigger Nothing  _ = return ()
+    trigger (Just x) p =
+        say "server" "Triggering rebuild of {}" [x] >> Index.reindex p x

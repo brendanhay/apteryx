@@ -17,7 +17,6 @@ import           Control.Error
 import           Control.Monad
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString                  (ByteString)
-import qualified Data.ByteString.Char8            as BS
 import           Data.CaseInsensitive             (CI)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
@@ -80,15 +79,12 @@ multiline :: Bool -- ^ Signifies the initial line follow ':' should be empty.
           -> Parser ByteString
 multiline e = mconcat <$> ((:) <$> first <*> many cont) <?> "multiline field"
   where
-    first =
-        if e
-            then endOfLine >> return ""
-            else delimit <$> line <?> "initial line"
+    first = if e
+        then endOfLine >> return ""
+        else line <?> "initial line"
 
-    cont = BS.cons ' ' . delimit <$> (satisfy whitespace *> line)
+    cont = mappend "\n " <$> (satisfy whitespace *> line)
         <?> "multiline continuation"
-
-    delimit = (`BS.snoc` '\n')
 
 line :: Parser ByteString
 line = skipComments *> takeLine <* skipComments <?> "line"

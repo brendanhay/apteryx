@@ -17,7 +17,7 @@
 module System.APT.Store
     ( Store
     , run
-    , run'
+    , parMapM
 
     , add
     , get
@@ -30,9 +30,11 @@ module System.APT.Store
     ) where
 
 import           Control.Applicative
+import           Control.DeepSeq
 import           Control.Error
 import           Control.Monad
 import           Control.Monad.Catch
+import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Control.Monad.Trans.Reader
 import           Data.ByteString           (ByteString)
@@ -52,6 +54,7 @@ import           Data.Time
 import           Network.AWS.S3            hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
+import qualified System.APT.IO             as IO
 import qualified System.APT.Package        as Pkg
 import           System.APT.Types
 
@@ -71,17 +74,17 @@ bucketPrefix = bktPrefix <$> asks _bucket
 
 type Store = ReaderT Env AWS
 
-run :: Bucket  -- ^ S3 Bucket backing the store.
-    -> Int     -- ^ Number of most recent package versions to consider.
-    -> Bool    -- ^ Print debug output to stdout.
-    -> Store a -- ^ The computation to run.
-    -> IO a
-run b v d s = runEitherT (loadAWSEnv AuthDiscover d)
-    >>= liftE
-    >>= (`run'` s) . Env b v
+run :: Bucket -> Int -> AWSEnv -> Store a -> IO a
+run b v e = run' (Env b v e)
 
 run' :: Env -> Store a -> IO a
 run' e s = runAWSEnv (_aws e) (runReaderT s e) >>= liftE
+
+-- Some sort of error handling here? MonadCatch?
+parMapM :: NFData b => (a -> Store b) -> [a] -> Store ([Error], [b])
+parMapM f xs = do
+    e <- ask
+    IO.parMapM (liftIO . run' e . f) xs
 
 -- | Get a list of objects starting at the store's prefix,
 --   adhering to the version limit and returning a list ordered by version.

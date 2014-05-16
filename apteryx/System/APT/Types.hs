@@ -268,6 +268,9 @@ data Entry a = Entry
 
 instance NFData a => NFData (Entry a)
 
+instance Show a => Buildable (Entry a) where
+    build = build . show
+
 type Object  = Entry Key
 type Package = Entry Meta
 

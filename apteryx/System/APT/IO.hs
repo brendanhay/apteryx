@@ -136,3 +136,7 @@ removePath p = exist f >>= (`when` rm f)
 
 parMapM :: (MonadIO m, NFData b) => (a -> Par.ParIO b) -> [a] -> m [b]
 parMapM f = liftIO . Par.runParIO . Par.parMapM f
+
+getAWSEnv :: Bool -> IO AWSEnv
+getAWSEnv d = runEitherT (loadAWSEnv AuthDiscover d) >>=
+    either (throwM . awsError) return
