@@ -74,17 +74,17 @@ bucketPrefix = bktPrefix <$> asks _bucket
 
 type Store = ReaderT Env AWS
 
-run :: Bucket -> Int -> AWSEnv -> Store a -> IO a
+run :: Bucket -> Int -> AWSEnv -> Store a -> IO (Either AWSError a)
 run b v e = run' (Env b v e)
 
-run' :: Env -> Store a -> IO a
-run' e s = runAWSEnv (_aws e) (runReaderT s e) >>= liftE
+run' :: Env -> Store a -> IO (Either AWSError a)
+run' e s = runAWSEnv (_aws e) (runReaderT s e)
 
 -- Some sort of error handling here? MonadCatch?
-parMapM :: NFData b => (a -> Store b) -> [a] -> Store ([Error], [b])
+parMapM :: NFData b => (a -> Store b) -> [a] -> Store ([AWSError], [b])
 parMapM f xs = do
     e <- ask
-    IO.parMapM (liftIO . run' e . f) xs
+    partitionEithers <$> IO.parMapM (liftIO . run' e . f) xs
 
 -- | Get a list of objects starting at the store's prefix,
 --   adhering to the version limit and returning a list ordered by version.
@@ -116,18 +116,14 @@ entries = do
     insert v xs = take v . sortBy (compare `on` (Down . entVers)) . mappend xs
 
 -- | Lookup the metadata for a specific entry.
-metadata :: ToKey a => a -> Store (Either Error Package)
+metadata :: ToKey a => a -> Store Package
 metadata k = do
     key <- toKey k
-    rq  <- HeadObject
+    rs  <- lift . send =<< HeadObject
         <$> bucketName
         <*> pure key
         <*> pure []
-    rs  <- lift $ sendCatch rq
-    return $ maybe
-        (Left . missingPackage $ "Unable to find package " <> key)
-        (Pkg.fromHeaders . responseHeaders)
-        (hush rs)
+    either throwM return (Pkg.fromHeaders $ responseHeaders rs)
 
 -- | Given a package description and contents, upload the file to S3.
 add :: Package -> FilePath -> Store ()
@@ -165,9 +161,6 @@ presign k t = lift =<< presignS3 GET
     <$> (Text.encodeUtf8 <$> bucketName)
     <*> (Text.encodeUtf8 <$> toKey k)
     <*> pure t
-
-liftE :: (MonadThrow m, ToError e) => Either e a -> m a
-liftE = either (throwM . toError) return
 
 class ToKey a where
     toKey :: a -> Store Text

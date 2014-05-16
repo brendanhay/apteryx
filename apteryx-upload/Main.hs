@@ -21,7 +21,6 @@ import           Control.Monad.Trans.Either
 import           Data.ByteString            (ByteString)
 import qualified Data.Conduit.Binary        as Conduit
 import           Data.Monoid
-import qualified Filesystem.Path.CurrentOS  as Path
 import           Options.Applicative
 import           System.APT.IO
 import qualified System.APT.Index           as Index
@@ -37,8 +36,8 @@ default (ByteString)
 
 data Options = Options
     { optKey     :: !Bucket
-    , optFile    :: !Path
-    , optTemp    :: !Path
+    , optFile    :: !FilePath
+    , optTemp    :: !FilePath
     , optAddress :: Maybe String
     , optDebug   :: !Bool
     } deriving (Eq, Show)
@@ -52,14 +51,14 @@ options = Options
         <> help "Destination S3 bucket and optional prefix to store packages. [required]"
          )
 
-    <*> pathOption
+    <*> strOption
          ( long "file"
         <> short 'f'
         <> metavar "PATH"
         <> help "Path to the file to upload. [required]"
          )
 
-    <*> pathOption
+    <*> strOption
          ( long "tmp"
         <> short 't'
         <> metavar "PATH"
@@ -86,20 +85,16 @@ main = do
     n           <- getProgName
     e           <- getAWSEnv optDebug
 
-    let path = Path.encodeString optFile
-
-    say n "Reading package description from {}" [path]
+    say n "Reading package description from {}" [optFile]
+    p <- withFile optFile ReadMode $ \hd ->
+        runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd)
+            >>= either throwM return
 
     Store.run optKey 1 e $ do
-        p <- withFile path ReadMode $ \hd ->
-            runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd)
-                >>= either throwM return
-
-        say n "Uploading {} to {}" [build path, build optKey]
-
+        say n "Uploading {} to {}" [build optFile, build optKey]
         Store.add p optFile
 
-        trigger optAddress p
+    trigger optAddress p
 
     say_ n "Done."
   where

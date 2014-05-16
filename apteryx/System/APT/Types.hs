@@ -98,6 +98,11 @@ instance ToError Error where
     toError (Exception ex) = toError ex
     toError e              = toError (show e)
 
+fromError :: AWSError -> [Error]
+fromError (Err  s) = [awsError s]
+fromError (Ex  ex) = [Exception ex]
+fromError (Ers xs) = concatMap fromError xs
+
 instance NFData Error
 
 invalidPackage, missingPackage, missingField, invalidField, awsError, shellError

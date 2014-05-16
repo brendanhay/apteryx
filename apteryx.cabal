@@ -42,7 +42,7 @@ library
     other-modules:
 
     build-depends:
-          amazonka             >= 0.4.1
+          amazonka             >= 0.4.2
         , async
         , attoparsec
         , base                 >= 4.6 && < 5
@@ -69,6 +69,7 @@ library
         , mmorph
         , monad-par
         , monad-par-extras
+        , mtl                  == 2.1.*
         , old-locale
         , optparse-applicative
         , process
@@ -79,7 +80,7 @@ library
         , text-format
         , time
         , tinylog              >= 0.8
-        , transformers
+        , transformers         == 0.3.*
         , unix
 
 executable apteryx-copy
@@ -110,7 +111,7 @@ executable apteryx-server
         , base
         , bytestring
         , directory
-        , either
+        , errors
         , exceptions
         , filepath
         , http-conduit

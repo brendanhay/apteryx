@@ -25,7 +25,7 @@ module System.APT.Index
     ) where
 
 import           Control.Applicative
-import           Control.Arrow                    (first, second)
+import           Control.Arrow                    (second)
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Resource     (runResourceT)
@@ -34,6 +34,7 @@ import qualified Data.ByteString.Char8            as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
 import qualified Data.Conduit.List                as Conduit
+import qualified Data.Foldable                    as Fold
 import           Data.List                        (intersperse, sort)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
@@ -42,6 +43,7 @@ import           Data.Monoid                      hiding (All)
 import           Data.Set                         (Set)
 import qualified Data.Set                         as Set
 import           Data.Time
+import           Network.AWS
 import           Network.HTTP.Conduit             hiding (path)
 import           Prelude                          hiding (lookup)
 import           System.APT.Compression
@@ -68,24 +70,22 @@ sync :: FilePath
 sync tmp dest as ctor = do
     (es, r) <- latest ctor
     c       <- liftIO $ generate tmp dest as r
-    return $! case c of
-        ExitSuccess   -> es
-        ExitFailure _ ->
-            shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) : es
+    return . ($ concatMap fromError es) $
+        case c of
+            ExitSuccess   -> id
+            ExitFailure _ ->
+                (shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) :)
 
 latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
-       -> Store ([Error], InRelease)
+       -> Store ([AWSError], InRelease)
 latest ctor = do
-    rs <- Store.entries >>= Store.parMapM (foldM f mempty)
-    t  <- liftIO getCurrentTime
-    return ( concatMap fst rs
-           , ctor t (Map.unionsWith (<>) (map snd rs))
-           )
+    r <- Store.entries >>= Store.parMapM (Fold.foldrM f mempty)
+    t <- liftIO getCurrentTime
+    return $ second (ctor t . Map.unionsWith (<>)) r
   where
-    f acc o = (`g` acc) <$> Store.metadata o
-
-    g (Left  l) = first  (l :)
-    g (Right p) = second (Map.insertWith (<>) (entArch p) (Set.singleton p))
+    f x m = do
+        y <- Store.metadata x
+        return $ Map.insertWith (<>) (entArch y) (Set.singleton y) m
 
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
 generate tmp dest as r@InRelease{..} =

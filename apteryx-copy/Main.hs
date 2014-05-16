@@ -92,10 +92,11 @@ options = Options
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
-    n           <- getProgName
-    e           <- getAWSEnv optDebug
 
-    Store.run optFrom optVersions e $ do
+    n <- getProgName
+    e <- getAWSEnv optDebug
+
+    r <- Store.run optFrom optVersions e $ do
         say n "Looking for entries in {}..." [optFrom]
         xs <- concat <$> Store.entries
 
@@ -104,9 +105,9 @@ main = do
         say n "Copying to {}..." [optTo]
         void $ Store.parMapM (go optTemp optTo) xs
 
-    trigger optAddress
-
-    say_ n "Done."
+    either (say n "Error: {}" . (:[]) . show)
+           (const $ say_ n "Done." >> trigger optAddress)
+           r
   where
     go tmp dest o@Entry{..} = do
         m <- Store.get o (liftEitherT . Pkg.fromFile tmp)

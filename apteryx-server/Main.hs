@@ -23,12 +23,12 @@ module Main (main) where
 
 import           Control.Applicative
 import           Control.Concurrent
+import           Control.Error               hiding (err)
 import           Control.Exception           (throwIO)
 import           Control.Monad
 import           Control.Monad.Catch         hiding (Handler)
 import           Control.Monad.IO.Class
 import           Control.Monad.Reader
-import           Control.Monad.Trans.Either
 import           Data.ByteString.Builder
 import qualified Data.ByteString.Char8       as BS
 import qualified Data.ByteString.Lazy.Char8  as LBS
@@ -307,8 +307,10 @@ routes c = do
 getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     e@Env{..} <- ask
-    t         <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
-    u         <- runStore e $ Store.presign (Entry n v a ()) t
+
+    t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
+    u <- runStore e (Store.presign (Entry n v a ()) t) >>=
+        either throwM return
 
     let (host, url) = BS.break (== '/') (BS.drop 8 u)
         (path, qry) = BS.break (== '?') url
@@ -395,14 +397,15 @@ sync f = do
 
     let Options{..} = _options
         ctor        = mkInRelease optCode optDesc optExpires
+        display     = Log.debug _logger . msg . show
 
     catchError . f _lock $
         runStore e (Index.sync optTemp optWWW optArchs ctor) >>=
-            mapM_ (Log.debug _logger . msg . show)
+            either display (mapM_ display)
 
-runStore :: MonadIO m => Env -> Store a -> m a
-runStore Env{..} = liftIO .
-    Store.run (optKey _options) (optVersions _options) _aws
+runStore :: MonadIO m => Env -> Store a -> m (Either Error a)
+runStore Env{..} s = liftIO $ fmapL (awsError . show) <$>
+    Store.run (optKey _options) (optVersions _options) _aws s
 
 blank :: Response
 blank = plain status200 ""
