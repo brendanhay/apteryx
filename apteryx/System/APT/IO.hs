@@ -33,6 +33,7 @@ import qualified Data.ByteString.Lazy.Char8   as LBS
 import           Data.Function
 import           Data.List                    (deleteFirstsBy)
 import           Network.AWS                  hiding (async)
+import           Network.HTTP.Date
 import           System.APT.Types
 import           System.Directory
 import           System.Exit
@@ -44,8 +45,20 @@ import           System.Process
 
 default (ByteString)
 
-getFileStat :: MonadIO m => FilePath -> m Stat
-getFileStat path = liftIO $ Stat
+getFileStat :: MonadIO m => FilePath -> m (Maybe (Size, HTTPDate))
+getFileStat path = liftIO $ do
+    p <- doesFileExist path
+    if not p
+        then return Nothing
+        else do
+            st <- getFileStatus path
+            return $ Just
+                ( fromIntegral $ fileSize st
+                , epochTimeToHTTPDate $ modificationTime st
+                )
+
+getFileHash :: MonadIO m => FilePath -> m Stat
+getFileHash path = liftIO $ Stat
     <$> (fromIntegral . fileSize <$> getFileStatus path)
     <*> Crypto.hashFile path
     <*> Crypto.hashFile path

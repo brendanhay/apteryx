@@ -157,10 +157,10 @@ generate tmp dest as r@InRelease{..} =
 
         mapM (index base) [rel, pkg, pkgz]
 
-    index base path = Index (drop (length base + 1) path) <$> getFileStat path
+    index base path = Index (drop (length base + 1) path) <$> getFileHash path
 
     contents p@Entry{..} =
-        let f = "Filename: /" +++ filename entArch entName entVers +++ "\n"
+        let f = "Filename: " +++ filename entArch entName entVers +++ "\n"
          in Pkg.toIndex p ++ [f]
 
 -- FIXME: Move to a more relevant location
@@ -185,7 +185,7 @@ filename :: Arch -> Name -> Vers -> Builder
 filename a n v = "packages/" +++ a +++ "/" +++ n +++ "/" +++ (urlEncode v)
 
 putBuilders :: Handle -> [Builder] -> IO ()
-putBuilders hd = hPutBuilder hd . joinBuilders
+putBuilders hd bs = hPutBuilder hd (joinBuilders bs) >> hFlush hd
 
 joinBuilders :: [Builder] -> Builder
 joinBuilders = (<> "\n") . mconcat . intersperse "\n"

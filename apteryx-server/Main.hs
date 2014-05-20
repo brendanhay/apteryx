@@ -2,6 +2,7 @@
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiWayIf                 #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TupleSections              #-}
@@ -48,7 +49,7 @@ import           Network.Wai.Handler.Warp
 import qualified Network.Wai.Middleware.Gzip as GZip
 import           Network.Wai.Predicate       hiding (Error, err, hd)
 import           Network.Wai.Routing         hiding (options)
-import           Options.Applicative
+import           Options.Applicative         hiding (header)
 import           Prelude                     hiding (concatMap, head, log)
 import           System.APT.Compression
 import           System.APT.IO
@@ -58,7 +59,6 @@ import           System.APT.Options
 import           System.APT.Store            (Store)
 import qualified System.APT.Store            as Store
 import           System.APT.Types
-import           System.Directory
 import           System.FilePath
 import qualified System.Logger               as Log
 import           System.Logger.Class         hiding (Error)
@@ -296,17 +296,26 @@ routes c = do
     arch "Packages"
     arch ("Packages" <.> compressExt)
   where
-    dist x = get ("/dists/" <> code <> "/" <> fromString x)
-         (getIndex x) request
+    dist x = get ("/dists/" <> code <> "/" <> fromString x) (getIndex x)
+         $  opt (header "Range")
+        .&. opt (header "If-Range")
+        .&. opt (header "If-Modified-Since")
+        .&. request
 
-    arch x = get ("/dists/" <> code <> "/s3/:arch/" <> fromString x)
-         (getArch x) $ capture "arch" .&. request
+    arch x = get ("/dists/" <> code <> "/s3/:arch/" <> fromString x) (getArch x)
+         $  capture "arch"
+        .&. opt (header "Range")
+        .&. opt (header "If-Range")
+        .&. opt (header "If-Modified-Since")
+        .&. request
 
     code = Text.encodeUtf8 c
 
 getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     e@Env{..} <- ask
+
+    liftIO $ print (requestHeaders rq)
 
     t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
     u <- runStore e (Store.presign (Entry n v a ()) t) >>=
@@ -368,28 +377,64 @@ triggerRebuild = sync lock >>= respond
                   return True)
               m
 
-getIndex :: FilePath -> Request -> Handler
-getIndex f rq = do
+getIndex :: FilePath
+         -> Maybe Range ::: Maybe Time ::: Maybe Time ::: Request
+         -> Handler
+getIndex p (range ::: ifRange ::: ifModified ::: rq) = do
     Options{..} <- asks _options
+
+    liftIO $ do
+        print (requestHeaders rq)
+        print ifRange
+        print ifModified
 
     -- FIXME:
     -- Have a date inside the _lock? Can be used to set the expires/cache-control
     -- headers to be the same as internal to the Valid-Until Release field
+    -- Switch all utctimes to http date if possible?
 
-    let path  = optWWW </> f
+    let path  = optWWW </> p
         hs    = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
                 , ("Pragma",        "no-cache")
                 , ("Expires",       "0")
                 ]
 
-    p <- catchError (doesFileExist path)
+    st <- catchError (getFileStat path)
 
-    return $ if p
-       then responseFile status200 hs path Nothing
-       else plain status404 "not-found\n"
+    return $! case st of
+        Nothing       -> plain status404 "not-found\n"
+        Just (sz, ts) ->
+            -- If-Modified-Since allows a 304 Not Modified to be returned
+            -- if content is unchanged.
+            case ifModified of
+                Just x ->
+                    if ts > httpDate x
+                        then responseFile status200 hs path Nothing
+                        else plain status304 "not-modified\n"
+                Nothing ->
+                    -- If the representation is unchanged, send me the part(s)
+                    -- that I am requesting in Range; otherwise, send me the
+                    -- entire representation.
+                    case ifRange of
+                        Just x ->
+                            if ts <= httpDate x
+                                then case range of
+                                    Just r -> case rangeToFilePart sz r of
+                                        Just fp ->
+                                            responseFile status206 hs path (Just fp)
+                                        Nothing ->
+                                            plain status416 "invalid-range\n"
+                                    Nothing ->
+                                        responseFile status200 hs path Nothing
+                                else responseFile status200 hs path Nothing
+                        Nothing ->
+                            responseFile status200 hs path Nothing
 
-getArch :: FilePath -> Arch ::: Request -> Handler
-getArch f (a ::: rq) = getIndex ("binary-" ++ show a </> f) rq
+getArch :: FilePath
+        -> Arch ::: Maybe Range ::: Maybe Time ::: Maybe Time ::: Request
+        -> Handler
+getArch p (a ::: r ::: f ::: m ::: rq) =
+    getIndex ("binary-" ++ show a </> p) (r ::: f ::: m ::: rq)
 
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
@@ -442,3 +487,14 @@ logRequest l app rq = do
         +++ fromMaybe mempty (lookup "referer" $ requestHeaders rq)
         +++ '"'
     return rs
+
+rangeToFilePart :: Size -> Range -> Maybe FilePart
+rangeToFilePart sz (Range f g)
+    | o  > n    = Nothing
+    | bs > n    = Nothing
+    | o  > bs   = Nothing
+    | otherwise = Just (FilePart o bs n)
+  where
+    o  = f sz
+    bs = g sz
+    n  = fromIntegral (unSize sz)

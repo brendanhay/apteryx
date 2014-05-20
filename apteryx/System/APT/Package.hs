@@ -59,7 +59,7 @@ fromFile :: MonadIO m
 fromFile tmp src = withTempFile tmp ".deb" $ \path hd -> do
     catchError $ (src $$ Conduit.sinkHandle hd) >> hClose hd
     bs <- runShell $ "ar -p " ++ path ++ " control.tar.gz | tar -Oxz ./control"
-    hoistEither (Ctl.parse bs >>= fromControl) `ap` getFileStat path
+    hoistEither (Ctl.parse bs >>= fromControl) `ap` getFileHash path
 
 fromHeaders :: FromHeaders a => [Header] -> Either Error a
 fromHeaders = parseHeaders . Map.fromList . map (first stripPrefix)

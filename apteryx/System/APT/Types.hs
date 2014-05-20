@@ -50,6 +50,7 @@ import qualified Data.Text.Lazy.Builder           as LBuild
 import           Data.Time
 import           Data.Typeable
 import           Network.AWS
+import           Network.HTTP.Date
 import           Network.HTTP.Types.Status
 import           Prelude                          hiding (all)
 import           System.Locale
@@ -241,6 +242,28 @@ instance ToBytes Size where
 instance FromByteString Size where
     parser = Size <$> decimal
 
+data Range = Range
+    { rangeOffset :: Size -> Integer
+    , rangeBytes  :: Size -> Integer
+    }
+
+instance FromByteString Range where
+    parser = uncurry Range <$> (bounded <|> lower <|> upper)
+      where
+        bounded = do
+            (x, y) <- (,) <$> (decimal <* char '-') <*> decimal
+            return (const x, const y)
+
+        lower = do
+            x <- decimal <* char '-'
+            return (const x, resize x)
+
+        upper = do
+            y <- char '-' *> decimal
+            return (resize y, const y)
+
+        resize n sz = fromIntegral sz - n
+
 data Stat = Stat
     { statSize   :: !Size
     , statMD5    :: !(Digest MD5)
@@ -351,6 +374,16 @@ absolute (D a _) = a
 relative :: Path -> FilePath
 relative (F _ r) = r
 relative (D _ r) = r
+
+newtype Time = Time { httpDate :: HTTPDate }
+    deriving (Eq, Show)
+
+instance FromByteString Time where
+    parser = takeByteString >>= f
+      where
+        f x = maybe (fail $ "Failed to read UTCTime from:" ++ BS.unpack x)
+                    (return . Time)
+                    (parseHTTPDate x)
 
 time :: UTCTime -> ByteString
 time = BS.pack . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S UTC"
