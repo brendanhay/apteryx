@@ -138,8 +138,8 @@ instance ToIndex InRelease where
         [ "Origin: "        =@ inOrigin
         , "Label: "         =@ inLabel
         , "Codename: "      =@ inCode
-        , "Date: "          =@ time inDate
-        , "Valid-Until: "   =@ time inUntil
+        , "Date: "          =@ inDate
+        , "Valid-Until: "   =@ inUntil
         , "Architectures: " =@ Map.keys inPkgs
         , "Description: "   =@ inDesc
         ]

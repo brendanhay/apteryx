@@ -42,7 +42,6 @@ import           Data.Maybe
 import           Data.Monoid                      hiding (All)
 import           Data.Set                         (Set)
 import qualified Data.Set                         as Set
-import           Data.Time
 import           Network.AWS
 import           Network.HTTP.Conduit             hiding (path)
 import           Prelude                          hiding (lookup)
@@ -65,7 +64,7 @@ default (Builder)
 sync :: FilePath
      -> FilePath
      -> [Arch]
-     -> (UTCTime -> Map Arch (Set Package) -> InRelease)
+     -> (Time -> Map Arch (Set Package) -> InRelease)
      -> Store [Error]
 sync tmp dest as ctor = do
     (es, r) <- latest ctor
@@ -76,11 +75,11 @@ sync tmp dest as ctor = do
             ExitFailure _ ->
                 (shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) :)
 
-latest :: (UTCTime -> Map Arch (Set Package) -> InRelease)
+latest :: (Time -> Map Arch (Set Package) -> InRelease)
        -> Store ([AWSError], InRelease)
 latest ctor = do
     r <- Store.entries >>= Store.parMapM (Fold.foldrM f mempty)
-    t <- liftIO getCurrentTime
+    t <- getCurrentTime
     return $ second (ctor t . Map.unionsWith (<>)) r
   where
     f x m = do

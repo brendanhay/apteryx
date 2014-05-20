@@ -41,11 +41,15 @@ import           System.FilePath
 import           System.IO
 import qualified System.IO.Temp               as Temp
 import           System.Posix.Files
+import           System.Posix.Time
 import           System.Process
 
 default (ByteString)
 
-getFileStat :: MonadIO m => FilePath -> m (Maybe (Size, HTTPDate))
+getCurrentTime :: MonadIO m => m Time
+getCurrentTime = liftIO $ Time . epochTimeToHTTPDate <$> epochTime
+
+getFileStat :: MonadIO m => FilePath -> m (Maybe (Size, Time))
 getFileStat path = liftIO $ do
     p <- doesFileExist path
     if not p
@@ -54,7 +58,7 @@ getFileStat path = liftIO $ do
             st <- getFileStatus path
             return $ Just
                 ( fromIntegral $ fileSize st
-                , epochTimeToHTTPDate $ modificationTime st
+                , Time . epochTimeToHTTPDate $ modificationTime st
                 )
 
 getFileHash :: MonadIO m => FilePath -> m Stat

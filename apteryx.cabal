@@ -71,7 +71,6 @@ library
         , monad-par
         , monad-par-extras
         , mtl                  == 2.1.*
-        , old-locale
         , optparse-applicative
         , process
         , resourcet
@@ -134,7 +133,6 @@ executable apteryx-server
         , mtl
         , optparse-applicative
         , text
-        , time
         , tinylog
         , transformers
         , wai

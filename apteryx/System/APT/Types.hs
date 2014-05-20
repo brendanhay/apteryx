@@ -6,6 +6,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE ViewPatterns               #-}
 
 -- Module      : System.APT.Types
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -47,13 +48,11 @@ import           Data.Text.Buildable
 import qualified Data.Text.Encoding               as Text
 import qualified Data.Text.Lazy                   as LText
 import qualified Data.Text.Lazy.Builder           as LBuild
-import           Data.Time
 import           Data.Typeable
 import           Network.AWS
 import           Network.HTTP.Date
 import           Network.HTTP.Types.Status
 import           Prelude                          hiding (all)
-import           System.Locale
 import           System.Logger.Message            (ToBytes(..))
 
 debExt :: Text
@@ -343,22 +342,19 @@ data InRelease = InRelease
     , inLabel  :: !Text
     , inCode   :: !Text
     , inDesc   :: !Text
-    , inDate   :: !UTCTime
-    , inUntil  :: !UTCTime
+    , inDate   :: !Time
+    , inUntil  :: !Time
     , inPkgs   :: Map Arch (Set Package)
     } deriving (Eq, Show)
 
-mkInRelease :: Text
-            -> Text
-            -> Int
-            -> (UTCTime -> Map Arch (Set Package) -> InRelease)
-mkInRelease code desc h = \t ps -> InRelease
+mkInRelease :: Text -> Text -> (Time -> Map Arch (Set Package) -> InRelease)
+mkInRelease code desc = \t ps -> InRelease
     { inOrigin = "Apteryx"
     , inLabel  = "Apteryx"
     , inCode   = code
     , inDesc   = desc
     , inDate   = t
-    , inUntil  = h `addTime` t
+    , inUntil  = addHour t
     , inPkgs   = ps
     }
 
@@ -376,17 +372,21 @@ relative (F _ r) = r
 relative (D _ r) = r
 
 newtype Time = Time { httpDate :: HTTPDate }
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Show)
+
+instance ToBytes Time where
+    bytes = bytes . formatHTTPDate . httpDate
 
 instance FromByteString Time where
     parser = takeByteString >>= f
       where
-        f x = maybe (fail $ "Failed to read UTCTime from:" ++ BS.unpack x)
+        f x = maybe (fail $ "Failed to parse Time from: " ++ BS.unpack x)
                     (return . Time)
                     (parseHTTPDate x)
 
-time :: UTCTime -> ByteString
-time = BS.pack . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S UTC"
-
-addTime :: Int -> UTCTime -> UTCTime
-addTime h = addUTCTime (realToFrac $ h * 60 * 60)
+addHour :: Time -> Time
+addHour (httpDate -> t)
+    | hs < 23   = Time $ t { hdHour = hs }
+    | otherwise = Time $ t { hdHour = 0, hdDay = hdDay t + 1 }
+  where
+    hs = hdHour t + 1

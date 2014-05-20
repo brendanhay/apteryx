@@ -50,7 +50,7 @@ import           Data.Ord
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Data.Text.Encoding        as Text
-import           Data.Time
+import qualified Data.Time                 as Time
 import           Network.AWS.S3            hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
@@ -156,11 +156,11 @@ copy from to bkt = do
     lift . send_ $
         PutObjectCopy (bktName bkt) kt (b <> "/" <> kf) Replace (Pkg.toHeaders to)
 
-presign :: ToKey a => a -> UTCTime -> Store ByteString
-presign k t = lift =<< presignS3 GET
+presign :: ToKey a => a -> Int -> Store ByteString
+presign k sec = lift =<< presignS3 GET
     <$> (Text.encodeUtf8 <$> bucketName)
     <*> (Text.encodeUtf8 <$> toKey k)
-    <*> pure t
+    <*> liftIO (Time.addUTCTime (realToFrac sec) <$> Time.getCurrentTime)
 
 class ToKey a where
     toKey :: a -> Store Text

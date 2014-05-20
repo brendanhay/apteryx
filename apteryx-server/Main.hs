@@ -38,7 +38,6 @@ import           Data.Monoid
 import           Data.String
 import           Data.Text                   (Text)
 import qualified Data.Text.Encoding          as Text
-import           Data.Time.Clock
 import           Data.Word
 import           Network.AWS
 import qualified Network.HTTP.Conduit        as HTTP
@@ -75,7 +74,6 @@ data Options = Options
     , optArchs    :: [Arch]
     , optCode     :: !Text
     , optDesc     :: !Text
-    , optExpires  :: !Int
     , optDebug    :: !Bool
     } deriving (Eq)
 
@@ -166,14 +164,6 @@ options = Options
         <> metavar "STR"
         <> help "Description of the repository for each Release file. [default]"
         <> value "A Magical APT Server"
-         )
-
-    <*> option
-         ( long "expiry"
-        <> short 'e'
-        <> metavar "HOURS"
-        <> help "Hours in the future to set each Release's expiry to. [default: 1]"
-        <> value 1
          )
 
     <*> switch
@@ -289,25 +279,23 @@ routes c = do
         .&. capture "name"
         .&. capture "vers"
 
-    dist "Release"
-    dist ("i18n/Translation-en" <.> compressExt)
-
     arch "Release"
     arch "Packages"
     arch ("Packages" <.> compressExt)
-  where
-    dist x = get ("/dists/" <> code <> "/" <> fromString x) (getIndex x)
-         $  opt (header "Range")
-        .&. opt (header "If-Range")
-        .&. opt (header "If-Modified-Since")
-        .&. request
 
+    dist "Release"
+    dist ("i18n/Translation-en" <.> compressExt)
+  where
     arch x = get ("/dists/" <> code <> "/s3/:arch/" <> fromString x) (getArch x)
          $  capture "arch"
         .&. opt (header "Range")
         .&. opt (header "If-Range")
         .&. opt (header "If-Modified-Since")
-        .&. request
+
+    dist x = get ("/dists/" <> code <> "/" <> fromString x) (getIndex x)
+         $  opt (header "Range")
+        .&. opt (header "If-Range")
+        .&. opt (header "If-Modified-Since")
 
     code = Text.encodeUtf8 c
 
@@ -315,11 +303,7 @@ getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     e@Env{..} <- ask
 
-    liftIO $ print (requestHeaders rq)
-
-    t <- addUTCTime (fromInteger 10) <$> liftIO getCurrentTime
-    u <- runStore e (Store.presign (Entry n v a ()) t) >>=
-        either throwM return
+    u <- runStore e (Store.presign (Entry n v a ()) 10) >>= either throwM return
 
     let (host, url) = BS.break (== '/') (BS.drop 8 u)
         (path, qry) = BS.break (== '?') url
@@ -377,21 +361,17 @@ triggerRebuild = sync lock >>= respond
                   return True)
               m
 
+getArch :: FilePath
+        -> Arch ::: Maybe Range ::: Maybe Time ::: Maybe Time
+        -> Handler
+getArch p (a ::: r ::: f ::: m) =
+    getIndex ("binary-" ++ show a </> p) (r ::: f ::: m)
+
 getIndex :: FilePath
-         -> Maybe Range ::: Maybe Time ::: Maybe Time ::: Request
+         -> Maybe Range ::: Maybe Time ::: Maybe Time
          -> Handler
-getIndex p (range ::: ifRange ::: ifModified ::: rq) = do
+getIndex p (range ::: ifRange ::: ifModified) = do
     Options{..} <- asks _options
-
-    liftIO $ do
-        print (requestHeaders rq)
-        print ifRange
-        print ifModified
-
-    -- FIXME:
-    -- Have a date inside the _lock? Can be used to set the expires/cache-control
-    -- headers to be the same as internal to the Valid-Until Release field
-    -- Switch all utctimes to http date if possible?
 
     let path  = optWWW </> p
         hs    = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -401,14 +381,14 @@ getIndex p (range ::: ifRange ::: ifModified ::: rq) = do
 
     st <- catchError (getFileStat path)
 
-    return $! case st of
+    return $ case st of
         Nothing       -> plain status404 "not-found\n"
         Just (sz, ts) ->
             -- If-Modified-Since allows a 304 Not Modified to be returned
             -- if content is unchanged.
             case ifModified of
                 Just x ->
-                    if ts > httpDate x
+                    if ts > x
                         then responseFile status200 hs path Nothing
                         else plain status304 "not-modified\n"
                 Nothing ->
@@ -417,7 +397,7 @@ getIndex p (range ::: ifRange ::: ifModified ::: rq) = do
                     -- entire representation.
                     case ifRange of
                         Just x ->
-                            if ts <= httpDate x
+                            if ts <= x
                                 then case range of
                                     Just r -> case rangeToFilePart sz r of
                                         Just fp ->
@@ -430,18 +410,12 @@ getIndex p (range ::: ifRange ::: ifModified ::: rq) = do
                         Nothing ->
                             responseFile status200 hs path Nothing
 
-getArch :: FilePath
-        -> Arch ::: Maybe Range ::: Maybe Time ::: Maybe Time ::: Request
-        -> Handler
-getArch p (a ::: r ::: f ::: m ::: rq) =
-    getIndex ("binary-" ++ show a </> p) (r ::: f ::: m ::: rq)
-
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
     e@Env{..} <- ask
 
     let Options{..} = _options
-        ctor        = mkInRelease optCode optDesc optExpires
+        ctor        = mkInRelease optCode optDesc
         display     = Log.debug _logger . msg . show
 
     catchError . f _lock $
