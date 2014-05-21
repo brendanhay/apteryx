@@ -23,6 +23,7 @@ import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString     (ByteString)
 import           Data.Monoid
+import           Data.Text           (Text)
 import qualified Data.Text           as Text
 import           Network.AWS
 import           Options.Applicative
@@ -31,6 +32,7 @@ import qualified System.APT.Index    as Index
 import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package  as Pkg
+import           System.APT.Store    (Store)
 import qualified System.APT.Store    as Store
 import           System.APT.Types
 import           System.Environment
@@ -98,32 +100,33 @@ main = do
 
     r <- Store.run optFrom optVersions e $ do
         say n "Looking for entries in {}..." [optFrom]
-        xs <- concat <$> Store.entries
+        xs <- concat <$> Store.entries >>= mapM Store.toKey
 
-        mapM_ (say n "Discovered {}" . (:[]) . entAnn) xs
+        mapM_ (say n "Discovered {}" . Only) xs
 
         say n "Copying to {}..." [optTo]
         void $ Store.parMapM (go optTemp optTo) xs
 
-    either (say n "Error: {}" . (:[]) . show)
+    either (say n "Error: {}" . Only . Shown)
            (const $ say_ n "Done." >> trigger optAddress)
            r
   where
-    go tmp dest o@Entry{..} = do
-        m <- Store.get o (liftEitherT . Pkg.fromFile tmp)
+    go :: FilePath -> Bucket -> Text -> Store ()
+    go tmp dest k = do
+        m <- Store.get k (liftEitherT . Pkg.fromFile tmp)
         n <- thread
-
-        say n "Retrieved {}" [entAnn]
-
+        say n "Retrieved {}" [k]
         case m of
-            Nothing -> say n "Unable to retrieve package from {}" [entAnn]
+            Nothing -> say n "Unable to retrieve package from {}" [k]
             Just x  -> do
-                say n "Successfully read package description from {}" [entAnn]
-                Store.copy o x dest
-                say n "Copied {} to {}" [build entAnn, build dest]
+                say n "Successfully read package description from {}" [k]
+                Store.copy k x dest
+                say n "Copied {} to {}" [build k, build dest]
 
-    thread = Text.drop 9 . Text.pack . show <$> liftIO myThreadId
+    thread :: MonadIO m => m Text
+    thread = (Text.drop 9 . Text.pack . show) `liftM` liftIO myThreadId
 
+    trigger :: MonadIO m => Maybe String -> m ()
     trigger Nothing  = return ()
     trigger (Just x) =
         say "server" "Triggering rebuild of {}" [x] >> Index.rebuild x

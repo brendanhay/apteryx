@@ -86,8 +86,8 @@ parMapM f xs = do
     e <- ask
     partitionEithers <$> IO.parMapM (liftIO . run' e . f) xs
 
--- | Get a list of objects starting at the store's prefix,
---   adhering to the version limit and returning a list ordered by version.
+-- | Get a list of objects starting at the store's prefix, semantically named,
+--   and adhering to the version limit and returning a list ordered by version.
 entries :: Store [[Object]]
 entries = do
     v  <- asks _versions
@@ -97,23 +97,21 @@ entries = do
         <*> bucketPrefix
         <*> pure 250
         <*> pure Nothing
+
     lift $ paginate rq
         $= Conduit.concatMap (filter match . gbrContents)
         $$ catalogue v mempty
   where
-    match Contents{..}
-        | bcSize == 0               = False
-        | bcStorageClass == Glacier = False
-        | otherwise                 = debExt `Text.isSuffixOf` bcKey
+    catalogue v m = do
+        x <- await
+        maybe (return $ Map.elems m)
+              (catalogue v . insert v m)
+              x
 
-    catalogue v m = maybe (return $ Map.elems m) (catalogue v . entry v m)
-        =<< await
-
-    entry v m Contents{..} =
-        maybe m (\x -> Map.insertWith (insert v) (entArch x, entName x) [x] m)
-                (BS.fromByteString (Text.encodeUtf8 bcKey))
-
-    insert v xs = take v . sortBy (compare `on` (Down . entVers)) . mappend xs
+    insert v m Contents{..} =
+        let f xs = take v . sortBy (compare `on` (Down . entVers)) . mappend xs
+            g x  = Map.insertWith f (entArch x, entName x) [x] m
+         in maybe m g $ BS.fromByteString (Text.encodeUtf8 bcKey)
 
 -- | Lookup the metadata for a specific entry.
 metadata :: ToKey a => a -> Store Package
@@ -148,7 +146,7 @@ get o f = do
 
 -- | Copy an object from the store, to another location in S3,
 --   overriding the metadata with the supplied package description.
-copy :: Object -> Package -> Bucket -> Store ()
+copy :: ToKey a => a -> Package -> Bucket -> Store ()
 copy from to bkt = do
     b  <- bucketName
     kt <- toKey to
@@ -162,8 +160,17 @@ presign k sec = lift =<< presignS3 GET
     <*> (Text.encodeUtf8 <$> toKey k)
     <*> liftIO (Time.addUTCTime (realToFrac sec) <$> Time.getCurrentTime)
 
+match :: Contents -> Bool
+match Contents{..}
+    | bcSize == 0               = False
+    | bcStorageClass == Glacier = False
+    | otherwise                 = debExt `Text.isSuffixOf` bcKey
+
 class ToKey a where
     toKey :: a -> Store Text
+
+instance ToKey Text where
+    toKey = return
 
 instance ToKey Key where
     toKey = return . urlEncode
@@ -181,8 +188,7 @@ objectKey :: Entry a -> Store Text
 objectKey Entry{..} = f (urlEncode path)
   where
     path = Text.concat
-        [ "pool/"
-        , name
+        [ name
         , "/"
         , name
         , "_"

@@ -90,7 +90,7 @@ main = do
         runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd)
             >>= either throwM return
 
-    Store.run optKey 1 e $ do
+    void . Store.run optKey 1 e $ do
         say n "Uploading {} to {}" [build optFile, build optKey]
         Store.add p optFile
 

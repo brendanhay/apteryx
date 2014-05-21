@@ -23,6 +23,9 @@ module System.APT.Log
     , sayT
 
     , build
+
+    , Text.Shown (..)
+    , Text.Only  (..)
     ) where
 
 import           Control.Monad.IO.Class
