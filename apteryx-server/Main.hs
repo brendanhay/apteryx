@@ -325,33 +325,35 @@ getPackage (a ::: n ::: v ::: rq) = do
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
     e <- ask
-    r <- runStore e $ Store.metadata etry
-    either (const missing) (const found) r
+    r <- runStore e (Store.metadata x)
+    either (const missing)
+           (const found)
+           r
   where
     missing = do
-        sayT name "Unable to find package {}" [etry]
+        s "Unable to find package {}" [x]
         return $ plain status404 "not-found\n"
 
     found = do
-        sayT name "Found package {}, rebuilding local index" [etry]
+        s "Found package {}, rebuilding local index" [x]
         sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
 
-    etry = mkEntry n v a
-    name = "add-package"
+    x = entry n v a
+    s = sayT "add-package"
 
 triggerRebuild :: Handler
 triggerRebuild = sync lock >>= respond
   where
     respond True = do
-        sayT_ name "Triggering local index rebuild"
+        sayT_ n "Triggering local index rebuild"
         return $ plain status202 "triggered-rebuild\n"
 
     respond False = do
-        sayT_ name "Rebuild already in progress"
+        sayT_ n "Rebuild already in progress"
         return $ plain status200 "rebuild-in-progress\n"
 
-    name = "rebuild"
+    n = "rebuild"
 
     lock l f = do
         m <- tryTakeMVar l
@@ -371,15 +373,8 @@ getIndex :: FilePath
          -> Maybe Range ::: Maybe Time ::: Maybe Time
          -> Handler
 getIndex p (range ::: ifRange ::: ifModified) = do
-    Options{..} <- asks _options
-
-    let path  = optWWW </> p
-        hs    = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
-                , ("Pragma",        "no-cache")
-                , ("Expires",       "0")
-                ]
-
-    st <- catchError (getFileStat path)
+    path <- asks ((</> p) . optWWW . _options)
+    st   <- catchError (getFileStat path)
 
     return $ case st of
         Nothing       -> plain status404 "not-found\n"
@@ -409,6 +404,11 @@ getIndex p (range ::: ifRange ::: ifModified) = do
                                 else responseFile status200 hs path Nothing
                         Nothing ->
                             responseFile status200 hs path Nothing
+  where
+    hs = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
+         , ("Pragma",        "no-cache")
+         , ("Expires",       "0")
+         ]
 
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do

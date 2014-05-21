@@ -22,7 +22,10 @@ module System.APT.Store
     , add
     , get
     , copy
-    , entries
+
+    , semantic
+    , versioned
+
     , metadata
     , presign
 
@@ -30,6 +33,7 @@ module System.APT.Store
     ) where
 
 import           Control.Applicative
+import           Control.Arrow
 import           Control.DeepSeq
 import           Control.Error
 import           Control.Monad
@@ -42,11 +46,15 @@ import qualified Data.ByteString.From      as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary       as Conduit
 import qualified Data.Conduit.List         as Conduit
+import qualified Data.Foldable                    as Fold
 import           Data.Function             (on)
 import           Data.List                 (sortBy)
+import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict           as Map
 import           Data.Monoid
 import           Data.Ord
+import           Data.Set                         (Set)
+import qualified Data.Set                         as Set
 import           Data.Text                 (Text)
 import qualified Data.Text                 as Text
 import qualified Data.Text.Encoding        as Text
@@ -191,8 +199,6 @@ objectKey Entry{..} = f (urlEncode path)
         [ name
         , "/"
         , name
-        , "_"
-        , Text.decodeUtf8 (verRaw entVers)
         , "_"
         , Text.decodeUtf8 (toByteString entArch)
         , ".deb"

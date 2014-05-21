@@ -307,8 +307,8 @@ stat = metaStat . entAnn
 sizeOf :: Package -> Int64
 sizeOf = unSize . statSize . stat
 
-mkEntry :: Name -> Vers -> Arch -> Entry ()
-mkEntry n v a = Entry n v a ()
+entry :: Name -> Vers -> Arch -> Entry ()
+entry n v a = Entry n v a ()
 
 instance FromByteString Object where
     parser = takeByteString >>= either (fail "Unable to parse Entry") return . f

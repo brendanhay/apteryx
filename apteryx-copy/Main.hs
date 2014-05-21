@@ -22,6 +22,7 @@ import           Control.Concurrent
 import           Control.Monad
 import           Control.Monad.IO.Class
 import           Data.ByteString     (ByteString)
+import qualified Data.Map.Strict     as Map
 import           Data.Monoid
 import           Data.Text           (Text)
 import qualified Data.Text           as Text
@@ -45,6 +46,7 @@ data Options = Options
     , optTemp     :: !FilePath
     , optAddress  :: Maybe String
     , optVersions :: !Int
+    , optSemantic :: !Bool
     , optDebug    :: !Bool
     } deriving (Eq, Show)
 
@@ -83,6 +85,12 @@ options = Options
         <> metavar "INT"
         <> help "Maximum number of most recent package versions to retain. [default: 3]"
         <> value 3
+         )
+
+    <*> switch
+         ( long "semantic"
+        <> short 's'
+        <> help "Whether to use S3 object versions or flat, semantically named keys."
          )
 
     <*> switch
