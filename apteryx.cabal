@@ -83,6 +83,10 @@ library
         , transformers         == 0.3.*
         , unix
 
+        -- Due to IncompleteHeaders error when
+        -- using SSL/443
+        , http-client          == 0.3.1.*
+
 executable apteryx-copy
     main-is:            Main.hs
     hs-source-dirs:     apteryx-copy

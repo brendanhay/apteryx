@@ -129,7 +129,7 @@ instance Buildable Bucket where
     build (Bucket b m) = build b <> build (maybe mempty ("/" <>) m)
 
 newtype Key = Key Text
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Show)
 
 instance ToURL Key where
     urlEncode (Key t) = urlEncode t
@@ -148,30 +148,6 @@ instance FromByteString Name where
 
 instance Buildable Name where
     build = build . Text.decodeUtf8 . unName
-
-data Vers = Vers
-    { verRaw :: !ByteString
-    , verNum :: [Int]
-    } deriving (Eq, Show)
-
-instance Ord Vers where
-    a `compare` b = verNum a `compare` verNum b
-
-instance ToURL Vers where
-    urlEncode = Text.decodeUtf8 . verRaw
-
-instance ToBytes Vers where
-    bytes = Build.byteString . verRaw
-
-instance Buildable Vers where
-    build = build . Text.decodeUtf8 . verRaw
-
-instance FromByteString Vers where
-    parser = do
-        bs <- takeWhile1 (/= '_')
-        Vers bs <$> either
-            (fail "Unable to parse numeric version") return
-            (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
 
 data Arch
     = All
@@ -286,6 +262,30 @@ data Meta = Meta
 
 instance NFData Meta
 
+data Vers = Vers
+    { verRaw :: !ByteString
+    , verNum :: [Int]
+    } deriving (Eq, Show)
+
+instance Ord Vers where
+    a `compare` b = verNum a `compare` verNum b
+
+instance ToURL Vers where
+    urlEncode = Text.decodeUtf8 . verRaw
+
+instance ToBytes Vers where
+    bytes = Build.byteString . verRaw
+
+instance Buildable Vers where
+    build = build . Text.decodeUtf8 . verRaw
+
+instance FromByteString Vers where
+    parser = do
+        bs <- takeWhile1 (/= '_')
+        Vers bs <$> either
+            (fail "Unable to parse numeric version") return
+            (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
+
 data Entry a = Entry
     { entName :: !Name
     , entVers :: !Vers
@@ -300,6 +300,7 @@ instance Show a => Buildable (Entry a) where
 
 type Object  = Entry Key
 type Package = Entry Meta
+type Upload  = Entry ()
 
 stat :: Package -> Stat
 stat = metaStat . entAnn
@@ -307,8 +308,8 @@ stat = metaStat . entAnn
 sizeOf :: Package -> Int64
 sizeOf = unSize . statSize . stat
 
-entry :: Name -> Vers -> Arch -> Entry ()
-entry n v a = Entry n v a ()
+upload :: Name -> Vers -> Arch -> Upload
+upload n v a = Entry n v a ()
 
 instance FromByteString Object where
     parser = takeByteString >>= either (fail "Unable to parse Entry") return . f

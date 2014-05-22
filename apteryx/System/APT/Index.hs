@@ -26,6 +26,7 @@ module System.APT.Index
 
 import           Control.Applicative
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Resource     (runResourceT)
 import           Data.ByteString.Builder
@@ -62,16 +63,15 @@ sync :: FilePath
      -> FilePath
      -> [Arch]
      -> (Time -> Map Arch (Set Package) -> InRelease)
-     -> Store [Error]
+     -> Store ()
 sync tmp dest as ctor = do
-    t        <- getCurrentTime
-    (es, xs) <- Store.versioned
-    c        <- liftIO $ generate tmp dest as (ctor t xs)
-    return . ($ concatMap fromError es) $
-        case c of
-            ExitSuccess   -> id
-            ExitFailure _ ->
-                (shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) :)
+    t  <- getCurrentTime
+    xs <- Store.versioned
+    c  <- liftIO $ generate tmp dest as (ctor t xs)
+    case c of
+        ExitSuccess   -> return ()
+        ExitFailure _ -> throwM $
+            shellError ("Failed to copy " ++ tmp ++ " to " ++ dest)
 
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
 generate tmp dest as r@InRelease{..} =

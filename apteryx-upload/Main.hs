@@ -79,6 +79,19 @@ options = Options
         <> help "Print debug output."
          )
 
+Uploading (via add) needs to be idempotent
+
+Copying needs to be monotonic
+
+Check for versioning response in header when adding, or copying
+and warn about lack of bucket versioning
+
+Rethink the ./copy flow, non --semantic needs to ensure in-order operation
+Remove goddamn ToKey in favour of: remoteKey, actualKey?
+Errors need to be propagated correctly
+
+Something about the statuscodes in errors? Remove
+
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
