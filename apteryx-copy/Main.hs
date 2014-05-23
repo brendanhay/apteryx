@@ -39,6 +39,7 @@ import           System.APT.Store    (Store)
 import qualified System.APT.Store    as Store
 import           System.APT.Types
 import           System.Environment
+import           System.Exit
 
 default (ByteString)
 
@@ -129,9 +130,9 @@ main = do
         say n "Copying to {}..." [optTo]
         void $ Store.parMapM (worker optTemp optFrom optTo) xs
 
-    either (say n "Error: {}" . Only . Shown)
-           (const $ say_ n "Done." >> trigger optAddress)
-           r
+    case r of
+        Left  x -> say n "Error: {}" (Only $ Shown x) >> exitFailure
+        Right _ -> say_ n "Done." >> trigger optAddress
   where
     go :: FilePath -> Bucket -> Text -> Store ()
     go tmp dest k = do

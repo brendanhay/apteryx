@@ -30,6 +30,7 @@ import qualified System.APT.Package         as Pkg
 import qualified System.APT.Store           as Store
 import           System.APT.Types           hiding (urlEncode)
 import           System.Environment
+import           System.Exit
 import           System.IO
 
 default (ByteString)
@@ -79,18 +80,10 @@ options = Options
         <> help "Print debug output."
          )
 
-Uploading (via add) needs to be idempotent
+-- Uploading (via add) needs to be idempotent
 
-Copying needs to be monotonic, and should probably succeed if it already exists
-
-Check for versioning response in header when adding, or copying
-and warn about lack of bucket versioning
-
-Rethink the ./copy flow, non --semantic needs to ensure in-order operation
-Remove goddamn ToKey in favour of: remoteKey, actualKey?
-Errors need to be propagated correctly
-
-Something about the statuscodes in errors? Remove
+-- Errors need to be propagated correctly
+-- Something about the statuscodes in errors? Remove
 
 main :: IO ()
 main = do
@@ -109,9 +102,10 @@ main = do
 
     trigger optAddress p
 
-    say_ n "Done."
+    case r of
+        Left  x -> say n "Error: {}" (Only $ Shown x) >> exitFailure
+        Right _ -> say_ n "Done." >> trigger optAddress p
   where
-    trigger :: MonadIO m => Maybe String -> m ()
     trigger Nothing  _ = return ()
     trigger (Just x) p =
         say "server" "Triggering rebuild of {}" [x] >> Index.reindex p x
