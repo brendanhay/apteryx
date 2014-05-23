@@ -166,6 +166,7 @@ worker tmp bf bt xs = mapM_ (\x -> tid >>= go x) xs
             Just kt -> do
                 say n "Retrieved package description from {}" [k]
                 r <- Store.monotonic bt kt (Store.copy bf kf bt kt)
+
                 maybe (say n "{} already exists, skipping" [k])
                       (const $ say n "Copied {} from {}" [build k, build bf])
                       r
