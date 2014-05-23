@@ -42,7 +42,7 @@ library
     other-modules:
 
     build-depends:
-          amazonka             >= 0.4.4
+          amazonka             >= 0.4.5
         , async
         , attoparsec
         , base                 >= 4.6 && < 5

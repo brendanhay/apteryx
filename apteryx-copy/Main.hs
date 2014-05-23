@@ -1,7 +1,9 @@
-{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
@@ -29,7 +31,7 @@ import qualified Data.Text           as Text
 import           Network.AWS
 import           Options.Applicative
 import           System.APT.IO
-import qualified System.APT.Index    as Index
+import qualified System.APT.Index       as Index
 import           System.APT.Log
 import           System.APT.Options
 import qualified System.APT.Package  as Pkg
@@ -99,6 +101,12 @@ options = Options
         <> help "Print debug output."
          )
 
+data Any where
+    AE :: ToKey (Entry a) => Entry a -> Any
+
+instance ToKey Any where
+    objectKey b (AE e) = objectKey b e
+
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
@@ -106,14 +114,20 @@ main = do
     n <- getProgName
     e <- getAWSEnv optDebug
 
-    r <- Store.run optFrom optVersions e $ do
+    -- FIXME: Check destination bucket has versioning turned on
+
+    r <- Store.run optVersions e $ do
         say n "Looking for entries in {}..." [optFrom]
         xs <- concat <$> Store.entries >>= mapM Store.toKey
 
-        mapM_ (say n "Discovered {}" . Only) xs
+        xs <- if optSemantic
+                  then cat (Store.semantic optFrom) id
+                  else cat (Store.versioned optFrom) Map.elems
+
+        mapM_ (say n "Discovered {}" . Only . objectKey optFrom) (concat xs)
 
         say n "Copying to {}..." [optTo]
-        void $ Store.parMapM (go optTemp optTo) xs
+        void $ Store.parMapM (worker optTemp optFrom optTo) xs
 
     either (say n "Error: {}" . Only . Shown)
            (const $ say_ n "Done." >> trigger optAddress)
@@ -134,7 +148,26 @@ main = do
     thread :: MonadIO m => m Text
     thread = (Text.drop 9 . Text.pack . show) `liftM` liftIO myThreadId
 
-    trigger :: MonadIO m => Maybe String -> m ()
     trigger Nothing  = return ()
     trigger (Just x) =
         say "server" "Triggering rebuild of {}" [x] >> Index.rebuild x
+
+worker :: FilePath -> Bucket -> Bucket -> [Any] -> Store ()
+worker tmp bf bt xs = mapM_ (\x -> tid >>= go x) xs
+  where
+    go kf n = do
+        let k = objectKey bf kf
+
+        say n "Downloading {}..." [k]
+        m <- Store.get bf kf (liftEitherT . Pkg.fromFile tmp)
+
+        case m of
+            Nothing -> say n "Unable to retrieve package from {}" [k]
+            Just kt -> do
+                say n "Retrieved package description from {}" [k]
+                r <- Store.monotonic bt kt (Store.copy bf kf bt kt)
+                maybe (say n "{} already exists, skipping" [k])
+                      (const $ say n "Copied {} from {}" [build k, build bf])
+                      r
+
+    tid = (Text.drop 9 . Text.pack . show) `liftM` liftIO myThreadId

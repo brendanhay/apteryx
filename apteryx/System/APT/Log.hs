@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns      #-}
 
 -- Module      : System.APT.Log
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>

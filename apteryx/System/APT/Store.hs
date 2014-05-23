@@ -1,7 +1,12 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE ViewPatterns      #-}
+{-# LANGUAGE ExtendedDefaultRules       #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE RecordWildCards            #-}
+
+{-# LANGUAGE DefaultSignatures       #-}
+
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -- Module      : System.APT.Store
 -- Copyright   : (c) 2014 Brendan Hay <brendan.g.hay@gmail.com>
@@ -15,12 +20,9 @@
 
 -- | Interface to the storage and retrieval of singular/plural artifacts from S3.
 module System.APT.Store
-    ( ToKey
-    , storeKey
-
+    ( ToKey (..)
     , Store
     , run
-    , guard
     , parMapM
 
     , semantic
@@ -31,66 +33,59 @@ module System.APT.Store
     , add
     , copy
     , presign
+    , monotonic
     ) where
 
 import           Control.Applicative
 import           Control.DeepSeq
 import           Control.Error
-import           Control.Monad             hiding (guard)
+import           Control.Monad
 import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Morph
 import           Control.Monad.Trans.Reader
-import           Data.ByteString           (ByteString)
-import qualified Data.ByteString.From      as BS
+import           Data.ByteString            (ByteString)
+import qualified Data.ByteString.From       as BS
 import           Data.Conduit
-import qualified Data.Conduit.Binary       as Conduit
-import qualified Data.Conduit.List         as Conduit
-import qualified Data.Foldable             as Fold
-import           Data.Function             (on)
-import           Data.List                 (sortBy)
-import           Data.Map.Strict           (Map)
-import qualified Data.Map.Strict           as Map
+import qualified Data.Conduit.Binary        as Conduit
+import qualified Data.Conduit.List          as Conduit
+import qualified Data.Foldable              as Fold
+import           Data.List                  (sort)
+import           Data.Map.Strict            (Map)
+import qualified Data.Map.Strict            as Map
 import           Data.Monoid
-import           Data.Ord
-import           Data.Set                  (Set)
-import qualified Data.Set                  as Set
-import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
-import qualified Data.Text.Encoding        as Text
-import qualified Data.Time                 as Time
-import           Network.AWS.S3            hiding (Bucket, Source)
+import           Data.Set                   (Set)
+import qualified Data.Set                   as Set
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import qualified Data.Text.Encoding         as Text
+import qualified Data.Time                  as Time
+import           Network.AWS.S3             hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
-import qualified System.APT.IO             as IO
-import qualified System.APT.Package        as Pkg
+import qualified System.APT.Package         as Pkg
 import           System.APT.Types
 
-class ToKey a where
-    storeKey :: a -> Store Text
+default (ByteString)
 
-instance ToKey Text where
-    storeKey = return
+class ToKey a where
+    objectKey :: Bucket -> a -> Text
 
 instance ToKey Contents where
-    storeKey = return . bcKey
-
-instance ToKey Key where
-    storeKey = return . urlEncode
+    objectKey _ = bcKey
 
 instance ToKey Object where
-    storeKey x = storeKey (entAnn x)
+    objectKey b = prependPrefix b . urlEncode . entAnn
 
 instance ToKey Package where
-    storeKey = entryKey
+    objectKey = entryKey
 
-instance ToKey Upload where
-    storeKey = entryKey
+-- instance ToKey Upload where
+--     objectKey = entryKey
 
 data Env = Env
-    { _bucket   :: !Bucket
-    , _versions :: !Int
-    , _aws      :: !AWSEnv
+    { _max :: !Int
+    , _aws :: !AWSEnv
     }
 
 type Store = ReaderT Env AWS
@@ -98,22 +93,17 @@ type Store = ReaderT Env AWS
 runStore :: Env -> Store a -> IO (Either AWSError a)
 runStore e s = runAWSEnv (_aws e) (runReaderT s e)
 
-run :: Bucket -> Int -> AWSEnv -> Store a -> IO (Either AWSError a)
-run b v e = runStore (Env b v e)
-
-guard :: Store a -> Store (Either AWSError a)
-guard s = do
-    env <- ask
-    liftIO $ runStore env s
+run :: Int -> AWSEnv -> Store a -> IO (Either AWSError a)
+run v e = runStore (Env v e)
 
 parMapM :: NFData b => (a -> Store b) -> [a] -> Store [b]
 parMapM f xs = do
-    env      <- ask
-    (es, ys) <- partitionEithers <$> IO.parMapM (liftIO . runStore env . f) xs
+    e        <- ask
+    (es, ys) <- partitionEithers <$> mapM (liftIO . runStore e . f) xs
     mapM_ throwM es
     return ys
 
--- | Get a list of objects starting at the store's prefix, semantically named,
+-- | Get a list of objects starting semantically named from a specific bucket,
 --   and adhering to the version limit and returning a list ordered by version.
 entries :: Store [[Object]]
 entries = do
@@ -136,7 +126,7 @@ entries = do
               x
 
     insert v m Contents{..} =
-        let f xs = take v . sortBy (compare `on` (Down . entVers)) . mappend xs
+        let f xs = take v . sort . mappend xs
             g x  = Map.insertWith f (entArch x, entName x) [x] m
          in maybe m g . BS.fromByteString $ Text.encodeUtf8 bcKey
 
@@ -150,11 +140,14 @@ metadata k = do
         <*> pure []
     either throwM return (Pkg.fromHeaders $ responseHeaders rs)
 
-get :: ToKey a => a -> (Source IO ByteString -> AWS b) -> Store (Maybe b)
-get o f = do
+get :: ToKey k
+    => Bucket
+    -> k
+    -> (Source IO ByteString -> AWS a)
+    -> Store (Maybe a)
+get b k f = do
     e  <- asks _aws
-    rq <- GetObject <$> bucketName <*> storeKey o <*> pure []
-    rs <- lift $ sendCatch rq
+    rs <- lift . sendCatch $ GetObject (bktName b) (objectKey b k) []
     maybe (return Nothing)
           (\x -> lift $ do
               (bdy, g) <- unwrapResumable (responseBody x)
@@ -163,29 +156,39 @@ get o f = do
   where
     hoist_ e = hoist $ either throwM return <=< runAWSEnv e
 
--- | Given a package description and contents, upload the file to S3.
-add :: Package -> FilePath -> Store ()
-add p f = lift . send_ =<< PutObject
-    <$> bucketName
-    <*> storeKey p
-    <*> pure (Pkg.toHeaders p)
-    <*> pure (requestBodySource (sizeOf p) (Conduit.sourceFile f))
+add :: Bucket -> Package -> FilePath -> Store ()
+add b k f = lift . send_ $ PutObject (bktName b) (objectKey b k) hs bdy
+  where
+    hs  = Pkg.toHeaders k
+    bdy = requestBodySource (sizeOf k) (Conduit.sourceFile f)
 
--- | Copy an object from the store, to another location in S3,
---   overriding the metadata with the supplied package description.
-copy :: ToKey a => a -> Package -> Bucket -> Store ()
-copy from to bkt = do
-    b  <- bucketName
-    kt <- storeKey to
-    kf <- storeKey from
-    lift . send_ $
-        PutObjectCopy (bktName bkt) kt (b <> "/" <> kf) Replace (Pkg.toHeaders to)
+copy :: ToKey k => Bucket -> k -> Bucket -> Package -> Store ()
+copy bf kf bt kt = lift . send_ $ PutObjectCopy (bktName bt) dst src Replace hs
+  where
+    dst = objectKey bt kt
+    src = strip (bktName bf) <> strip (objectKey bf kf)
+    hs  = Pkg.toHeaders kt
 
-presign :: ToKey a => a -> Int -> Store ByteString
-presign k sec = lift =<< presignS3 GET
-    <$> (Text.encodeUtf8 <$> bucketName)
-    <*> (Text.encodeUtf8 <$> storeKey k)
-    <*> liftIO (Time.addUTCTime (realToFrac sec) <$> Time.getCurrentTime)
+presign :: ToKey k => Bucket -> k -> Int -> Store ByteString
+presign b k n = liftIO expiry >>= lift . presignS3 GET bkt obj
+  where
+    expiry = Time.addUTCTime (realToFrac n) <$> Time.getCurrentTime
+
+    bkt = Text.encodeUtf8 (bktName b)
+    obj = Text.encodeUtf8 (objectKey b k)
+
+monotonic :: ToKey (Entry a) => Bucket -> Entry a -> Store b -> Store (Maybe b)
+monotonic b k s = do
+    rs <- lift (sendCatch $ HeadObject (bktName b) (objectKey b k) []) >>= parse
+    case rs of
+        Left  e | serStatus e /= Just 404 -> throwM (toError e)
+        Right x | entVers x >= entVers k  -> return Nothing
+        _                                 -> Just <$> s
+  where
+    parse :: Either e HeadObjectResponse -> Store (Either e Package)
+    parse (Left  e) = return (Left e)
+    parse (Right r) = either throwM (return . Right) . Pkg.fromHeaders $
+        responseHeaders r
 
 filterContents :: GetBucketResponse -> [Contents]
 filterContents = filter match . gbrContents
@@ -211,11 +214,15 @@ instance ToKey (Entry Key) where
 instance ToKey (Entry Meta) where
     toKey = objectKey
 
-bucketPrefix :: Store (Maybe Text)
-bucketPrefix = bktPrefix <$> asks _bucket
+prependPrefix :: Bucket -> Text -> Text
+prependPrefix b k = ("/" <>) f
+  where
+    f | Just x <- bktPrefix b
+      , not (Text.null x) = strip x <> "/" <> strip k
+      | otherwise         = strip k
 
-entryKey :: Entry a -> Store Text
-entryKey Entry{..} = f (urlEncode path)
+strip :: Text -> Text
+strip x = f . Text.stripSuffix "/" . f $ Text.stripPrefix "/" x
   where
     path = Text.concat
         [ name

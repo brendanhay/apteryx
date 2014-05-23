@@ -81,7 +81,7 @@ options = Options
 
 Uploading (via add) needs to be idempotent
 
-Copying needs to be monotonic
+Copying needs to be monotonic, and should probably succeed if it already exists
 
 Check for versioning response in header when adding, or copying
 and warn about lack of bucket versioning
@@ -111,6 +111,7 @@ main = do
 
     say_ n "Done."
   where
+    trigger :: MonadIO m => Maybe String -> m ()
     trigger Nothing  _ = return ()
     trigger (Just x) p =
         say "server" "Triggering rebuild of {}" [x] >> Index.reindex p x
