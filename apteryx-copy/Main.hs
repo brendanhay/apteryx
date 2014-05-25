@@ -117,6 +117,7 @@ main = do
 
     -- FIXME: Check destination bucket has versioning turned on
 
+    say n "Looking for entries in {}..." [optFrom]
     r <- Store.run optVersions e $ do
         say n "Looking for entries in {}..." [optFrom]
         xs <- concat <$> Store.entries >>= mapM Store.toKey

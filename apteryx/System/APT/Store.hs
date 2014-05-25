@@ -63,9 +63,9 @@ import qualified Data.Time                  as Time
 import           Network.AWS.S3             hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
+import qualified System.APT.IO              as IO
 import qualified System.APT.Package         as Pkg
 import           System.APT.Types
-
 default (ByteString)
 
 class ToKey a where
@@ -73,6 +73,9 @@ class ToKey a where
 
 instance ToKey Contents where
     objectKey _ = bcKey
+
+instance ToKey Version where
+    objectKey _ = vKey
 
 instance ToKey Object where
     objectKey b = prependPrefix b . urlEncode . entAnn
@@ -181,7 +184,7 @@ monotonic :: ToKey (Entry a) => Bucket -> Entry a -> Store b -> Store (Maybe b)
 monotonic b k s = do
     rs <- lift (sendCatch $ HeadObject (bktName b) (objectKey b k) []) >>= parse
     case rs of
-        Left  e | serStatus e /= Just 404 -> throwM (toError e)
+--        Left  e | serStatus e /= Just 404 -> throwM (toError e)
         Right x | entVers x >= entVers k  -> return Nothing
         _                                 -> Just <$> s
   where
@@ -215,7 +218,7 @@ instance ToKey (Entry Meta) where
     toKey = objectKey
 
 prependPrefix :: Bucket -> Text -> Text
-prependPrefix b k = ("/" <>) f
+prependPrefix b k = "/" <> f
   where
     f | Just x <- bktPrefix b
       , not (Text.null x) = strip x <> "/" <> strip k
