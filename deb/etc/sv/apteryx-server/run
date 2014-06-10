@@ -1,17 +1,43 @@
 #!/usr/bin/env bash
+
 set -e
 
 exec 2>&1
 
+function join {
+    local sep="$1"
+    local acc=""
+
+    declare -a var=("${!2}")
+
+    for idx in ${!var[*]}; do
+        acc="${acc} ${sep} ${var[$idx]}"
+    done
+
+    echo ${acc:1}
+}
+
 app=apteryx-server
+config=/etc/$app/.env
 
 export HOME=/opt/$app
 
 cd $HOME
 
-exec chpst -e /etc/$app -u www-data $HOME/bin/$app \
+source $config
+
+if [ ${#APTERYX_ARCHITECTURES[@]} -eq 0 ]; then
+    echo "Need to set array of APTERYX_ARCHITECTURES in $config/.env"
+    exit 1
+fi
+
+exec chpst -u www-data $HOME/bin/$app \
     --host ${APTERYX_HOST:=127.0.0.1} \
     --port ${APTERYX_PORT:=8080} \
+    --www ${APTERYX_WWW:/var/www/apteryx-server} \
+    --tmp ${APTERYX_TMP:=/var/tmp} \
+    --versions ${APTERYX_VERSIONS:=3} \
     --key ${APTERYX_KEY:?"Need to set APTERYX_KEY in $config/.env"} \
-    --tmp ${APTERYX_DIR:?"Need to set APTERYX_DIR in $config/.env"} \
-    --version ${APTERYX_VERSIONS:=3}
+    --codename ${APTERYX_CODENAME:?"Need to set APTERYX_CODENAME in $config/.env"} \
+    --description ${APTERYX_DESCRIPTION:?"Need to set APTERYX_DESCRIPTION in $config/.env"} \
+    $(join "--arch" $APTERYX_ARCHITECTURES[@])
