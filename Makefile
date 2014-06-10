@@ -10,7 +10,7 @@ link:
 	$(foreach dir, $(wildcard apteryx-*),ln -fs dist/build/$(dir)/$(dir) $(dir:apteryx-%=%);)
 
 clean:
-	-rm -rf dist cabal.sandbox.config .cabal-sandbox $(OUT)
+	-rm -rf dist cabal.sandbox.config .cabal-sandbox
 	cabal clean
 
 test:
