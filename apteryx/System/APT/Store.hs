@@ -63,9 +63,9 @@ import qualified Data.Time                  as Time
 import           Network.AWS.S3             hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
-import qualified System.APT.IO              as IO
 import qualified System.APT.Package         as Pkg
 import           System.APT.Types
+
 default (ByteString)
 
 class ToKey a where
@@ -77,14 +77,14 @@ instance ToKey Contents where
 instance ToKey Version where
     objectKey _ = vKey
 
+instance ToKey (Entry ()) where
+    objectKey = entryKey
+
 instance ToKey Object where
     objectKey b = prependPrefix b . urlEncode . entAnn
 
 instance ToKey Package where
     objectKey = entryKey
-
--- instance ToKey Upload where
---     objectKey = entryKey
 
 data Env = Env
     { _max :: !Int

@@ -308,9 +308,6 @@ stat = metaStat . entAnn
 sizeOf :: Package -> Int64
 sizeOf = unSize . statSize . stat
 
--- mkUpload :: Name -> Vers -> Arch -> Upload
--- mkUpload n v a = Entry n v a ()
-
 instance FromByteString Object where
     parser = takeByteString >>= either (fail "Unable to parse Entry") return . f
       where

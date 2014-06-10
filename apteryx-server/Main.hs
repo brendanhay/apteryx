@@ -210,19 +210,6 @@ instance MonadLogger App where
 instance MonadLogger (EitherT e App) where
     log l f = lift (log l f)
 
-instance MonadThrow (EitherT e App) where
-    throwM = lift . throwM
-
-instance MonadCatch (EitherT e App) where
-    catch m f = EitherT $
-        runEitherT m `catch` \e -> runEitherT (f e)
-
-    mask a = EitherT $
-        mask $ \u -> runEitherT (a $ mapEitherT u)
-
-    uninterruptibleMask a = EitherT $
-        uninterruptibleMask $ \u -> runEitherT (a $ mapEitherT u)
-
 type Handler = EitherT Error App Response
 
 runHandler :: Env -> Handler -> IO Response
@@ -303,7 +290,8 @@ getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     e@Env{..} <- ask
 
-    u <- runStore e (Store.presign (Entry n v a ()) 10) >>= either throwM return
+    u <- runStore e (Store.presign (optKey _options) (Entry n v a ()) 10)
+        >>= either throwM return
 
     let (host, url) = BS.break (== '/') (BS.drop 8 u)
         (path, qry) = BS.break (== '?') url
@@ -324,8 +312,8 @@ getPackage (a ::: n ::: v ::: rq) = do
 
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
-    e <- ask
-    r <- runStore e (Store.metadata x)
+    e@Env{..} <- ask
+    r         <- runStore e (Store.metadata (optKey _options) x)
     either (const missing)
            (const found)
            r
@@ -339,7 +327,7 @@ addPackage (a ::: n ::: v) = do
         sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
 
-    x = entry n v a
+    x = Entry n v a ()
     s = sayT "add-package"
 
 triggerRebuild :: Handler
@@ -419,12 +407,12 @@ sync f = do
         display     = Log.debug _logger . msg . show
 
     catchError . f _lock $
-        runStore e (Index.sync optTemp optWWW optArchs ctor) >>=
-            either display (mapM_ display)
+        runStore e (Index.sync optKey optTemp optWWW optArchs ctor) >>=
+            either display return
 
 runStore :: MonadIO m => Env -> Store a -> m (Either Error a)
 runStore Env{..} s = liftIO $ fmapL (awsError . show) <$>
-    Store.run (optKey _options) (optVersions _options) _aws s
+    Store.run (optVersions _options) _aws s
 
 blank :: Response
 blank = plain status200 ""
