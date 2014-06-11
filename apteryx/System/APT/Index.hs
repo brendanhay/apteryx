@@ -133,7 +133,7 @@ generate tmp cwd as r@InRelease{..} =
 
         -- <arch>/Packages
         writeHandle pkg $ \hd ->
-            mapM_ (putBuilders hd . contents) (Set.toList ps)
+            mapM_ (putBuilders hd . contents) (reverse $ Set.toList ps)
 
         -- <arch>/Packages.<ext>
         readHandle pkg $ \x ->

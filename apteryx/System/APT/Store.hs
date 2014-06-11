@@ -49,6 +49,7 @@ import qualified Data.ByteString.From       as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary        as Conduit
 import qualified Data.Conduit.List          as Conduit
+import qualified Data.Foldable              as Fold
 import           Data.List                  (sort)
 import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
@@ -127,22 +128,26 @@ semantic Bucket{..} = do
          in maybe m g . BS.fromByteString $ Text.encodeUtf8 bcKey
 
 versioned :: Bucket -> Store (Map Arch (Set Package))
-versioned b@Bucket{..} = do
+versioned Bucket{..} = do
     v  <- asks _max
     xs <- lift $ paginate initial
         $= Conduit.concatMap filterContents
         $$ Conduit.consume
     ps <- parMapM (versions $ initial { gbMaxKeys = v }) xs
-    return $ Map.unions ps
+    return $ Fold.foldl' (Map.unionWith (<>)) mempty ps
   where
     initial = GetBucket bktName (Delimiter '/') bktPrefix 250 Nothing
 
     versions rq Contents{..} = do
         rs <- lift . send . GetBucketVersions $ rq { gbPrefix = Just bcKey }
-        ps <- mapM (metadata b) (gbvrVersions rs)
+        ps <- mapM (meta) (gbvrVersions rs)
         return $ case ps of
             (x : _) -> Map.singleton (entArch x) (Set.fromList ps)
             []      -> mempty
+
+    meta Version{..} = do
+        rs <- lift . send $ GetVersion (HeadObject bktName vKey []) vVersionId
+        either throwM return (Pkg.fromHeaders $ responseHeaders rs)
 
 -- | Lookup the metadata for a specific entry.
 metadata :: ToKey a => Bucket -> a -> Store Package
