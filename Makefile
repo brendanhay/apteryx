@@ -1,6 +1,11 @@
-SHELL := /usr/bin/env bash
-FLAGS := --disable-documentation --disable-library-coverage
-DEPS  := vendor/amazonka vendor/bzlib-conduit
+SHELL        := /usr/bin/env bash
+NAME         := apteryx
+VERSION      := $(shell sed -n 's/^version: *\(.*\)$$/\1/p' $(NAME).cabal)
+BUILD_NUMBER ?= 0
+DEB          := $(NAME)_$(VERSION)+$(BUILD_NUMBER)_amd64.deb
+FLAGS        := --disable-documentation --disable-library-coverage
+DEPS         := vendor/amazonka vendor/bzlib-conduit
+BIN          := dist/build/$(NAME)/$(NAME)
 
 .PHONY: build clean test lint
 
@@ -21,6 +26,16 @@ lint:
 
 build:
 	cabal build $(addprefix -,$(findstring j,$(MAKEFLAGS)))
+
+dist: dist/$(DEB)
+
+%.deb: deps build
+	makedeb --name=$(NAME) \
+	 --version=$(VERSION) \
+	 --debian-dir=deb \
+	 --build=$(BUILD_NUMBER) \
+	 --architecture=amd64 \
+	 --output-dir=dist
 
 deps: add-sources
 	cabal install -j $(FLAGS) --only-dependencies
