@@ -49,7 +49,6 @@ import qualified Data.ByteString.From       as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary        as Conduit
 import qualified Data.Conduit.List          as Conduit
-import qualified Data.Foldable              as Fold
 import           Data.List                  (sort)
 import           Data.Map.Strict            (Map)
 import qualified Data.Map.Strict            as Map
@@ -63,6 +62,7 @@ import qualified Data.Time                  as Time
 import           Network.AWS.S3             hiding (Bucket, Source)
 import           Network.HTTP.Conduit
 import           Network.HTTP.Types.Method
+import qualified System.APT.IO              as IO
 import qualified System.APT.Package         as Pkg
 import           System.APT.Types
 
@@ -80,11 +80,11 @@ instance ToKey Version where
 instance ToKey (Entry ()) where
     objectKey = entryKey
 
-instance ToKey Object where
-    objectKey b = prependPrefix b . urlEncode . entAnn
-
 instance ToKey Package where
     objectKey = entryKey
+
+instance ToKey Object where
+    objectKey b = prependPrefix b . urlEncode . entAnn
 
 data Env = Env
     { _max :: !Int
@@ -102,23 +102,16 @@ run v e = runStore (Env v e)
 parMapM :: NFData b => (a -> Store b) -> [a] -> Store [b]
 parMapM f xs = do
     e        <- ask
-    (es, ys) <- partitionEithers <$> mapM (liftIO . runStore e . f) xs
+    (es, ys) <- partitionEithers <$> IO.parMapM (liftIO . runStore e . f) xs
     mapM_ throwM es
     return ys
 
 -- | Get a list of objects starting semantically named from a specific bucket,
 --   and adhering to the version limit and returning a list ordered by version.
-entries :: Store [[Object]]
-entries = do
-    v  <- asks _versions
-    rq <- GetBucket
-        <$> bucketName
-        <*> pure (Delimiter '/')
-        <*> bucketPrefix
-        <*> pure 250
-        <*> pure Nothing
-
-    lift $ paginate rq
+semantic :: Bucket -> Store [Set Object]
+semantic Bucket{..} = do
+    v  <- asks _max
+    lift $ paginate (GetBucket bktName (Delimiter '/') bktPrefix 250 Nothing)
         $= Conduit.concatMap filterContents
         $$ catalogue v mempty
   where
@@ -133,14 +126,28 @@ entries = do
             g x  = Map.insertWith f (entArch x, entName x) [x] m
          in maybe m g . BS.fromByteString $ Text.encodeUtf8 bcKey
 
+versioned :: Bucket -> Store (Map Arch (Set Package))
+versioned b@Bucket{..} = do
+    v  <- asks _max
+    xs <- lift $ paginate initial
+        $= Conduit.concatMap filterContents
+        $$ Conduit.consume
+    ps <- parMapM (versions $ initial { gbMaxKeys = v }) xs
+    return $ Map.unions ps
+  where
+    initial = GetBucket bktName (Delimiter '/') bktPrefix 250 Nothing
+
+    versions rq Contents{..} = do
+        rs <- lift . send . GetBucketVersions $ rq { gbPrefix = Just bcKey }
+        ps <- mapM (metadata b) (gbvrVersions rs)
+        return $ case ps of
+            (x : _) -> Map.singleton (entArch x) (Set.fromList ps)
+            []      -> mempty
+
 -- | Lookup the metadata for a specific entry.
-metadata :: ToKey a => a -> Store Package
-metadata k = do
-    key <- storeKey k
-    rs  <- lift . send =<< HeadObject
-        <$> bucketName
-        <*> pure key
-        <*> pure []
+metadata :: ToKey a => Bucket -> a -> Store Package
+metadata b@Bucket{..} k = do
+    rs <- lift . send $ HeadObject bktName (objectKey b k) []
     either throwM return (Pkg.fromHeaders $ responseHeaders rs)
 
 get :: ToKey k
@@ -166,10 +173,11 @@ add b k f = lift . send_ $ PutObject (bktName b) (objectKey b k) hs bdy
     bdy = requestBodySource (sizeOf k) (Conduit.sourceFile f)
 
 copy :: ToKey k => Bucket -> k -> Bucket -> Package -> Store ()
-copy bf kf bt kt = lift . send_ $ PutObjectCopy (bktName bt) dst src Replace hs
+copy bf kf bt kt =
+    lift . send_ $ PutObjectCopy (bktName bt) dst src Replace hs
   where
     dst = objectKey bt kt
-    src = strip (bktName bf) <> strip (objectKey bf kf)
+    src = strip (bktName bf) <> "/" <> strip (objectKey bf kf)
     hs  = Pkg.toHeaders kt
 
 presign :: ToKey k => Bucket -> k -> Int -> Store ByteString
@@ -184,9 +192,8 @@ monotonic :: ToKey (Entry a) => Bucket -> Entry a -> Store b -> Store (Maybe b)
 monotonic b k s = do
     rs <- lift (sendCatch $ HeadObject (bktName b) (objectKey b k) []) >>= parse
     case rs of
---        Left  e | serStatus e /= Just 404 -> throwM (toError e)
-        Right x | entVers x >= entVers k  -> return Nothing
-        _                                 -> Just <$> s
+         Right x | entVers x >= entVers k  -> return Nothing
+         _                                 -> Just <$> s
   where
     parse :: Either e HeadObjectResponse -> Store (Either e Package)
     parse (Left  e) = return (Left e)
@@ -202,20 +209,13 @@ match Contents{..}
     | bcStorageClass == Glacier = False
     | otherwise                 = debExt `Text.isSuffixOf` bcKey
 
-class ToKey a where
-    toKey :: a -> Store Text
-
-instance ToKey Text where
-    toKey = return
-
-instance ToKey Key where
-    toKey = return . urlEncode
-
-instance ToKey (Entry Key) where
-    toKey x = toKey (entAnn x)
-
-instance ToKey (Entry Meta) where
-    toKey = objectKey
+entryKey :: Bucket -> Entry a -> Text
+entryKey b Entry{..} = prependPrefix b $ Text.concat
+    [ Text.decodeUtf8 (toByteString entArch)
+    , "/"
+    , Text.decodeUtf8 (unName entName)
+    , ".deb"
+    ]
 
 prependPrefix :: Bucket -> Text -> Text
 prependPrefix b k = "/" <> f
@@ -225,21 +225,6 @@ prependPrefix b k = "/" <> f
       | otherwise         = strip k
 
 strip :: Text -> Text
-strip x = f . Text.stripSuffix "/" . f $ Text.stripPrefix "/" x
+strip = f Text.stripSuffix . f Text.stripPrefix
   where
-    path = Text.concat
-        [ name
-        , "/"
-        , name
-        , "_"
-        , Text.decodeUtf8 (toByteString entArch)
-        , ".deb"
-        ]
-
-    name = Text.decodeUtf8 (unName entName)
-
-    f :: Text -> Store Text
-    f x = (<> "/" <> g x) . g . fromMaybe "" <$> bucketPrefix
-
-    g :: Text -> Text
-    g x = fromMaybe x $ "/" `Text.stripSuffix` x
+    f g x = fromMaybe x $ g "/" x
