@@ -300,7 +300,6 @@ instance Show a => Buildable (Entry a) where
 
 type Object  = Entry Key
 type Package = Entry Meta
-type Upload  = Entry ()
 
 stat :: Package -> Stat
 stat = metaStat . entAnn

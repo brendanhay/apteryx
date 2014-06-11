@@ -23,20 +23,20 @@ import           Control.Applicative
 import           Control.Concurrent
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Data.ByteString     (ByteString)
-import qualified Data.Map.Strict     as Map
-import           Data.Monoid
-import           Data.Text           (Text)
-import qualified Data.Text           as Text
+import           Data.ByteString        (ByteString)
+import qualified Data.Map.Strict        as Map
+import           Data.Monoid            hiding (Any)
+import qualified Data.Set               as Set
+import qualified Data.Text              as Text
 import           Network.AWS
 import           Options.Applicative
 import           System.APT.IO
 import qualified System.APT.Index       as Index
 import           System.APT.Log
 import           System.APT.Options
-import qualified System.APT.Package  as Pkg
-import           System.APT.Store    (Store)
-import qualified System.APT.Store    as Store
+import qualified System.APT.Package     as Pkg
+import           System.APT.Store       (ToKey(..), Store)
+import qualified System.APT.Store       as Store
 import           System.APT.Types
 import           System.Environment
 import           System.Exit
@@ -119,11 +119,8 @@ main = do
 
     say n "Looking for entries in {}..." [optFrom]
     r <- Store.run optVersions e $ do
-        say n "Looking for entries in {}..." [optFrom]
-        xs <- concat <$> Store.entries >>= mapM Store.toKey
-
         xs <- if optSemantic
-                  then cat (Store.semantic optFrom) id
+                  then cat (Store.semantic  optFrom) id
                   else cat (Store.versioned optFrom) Map.elems
 
         mapM_ (say n "Discovered {}" . Only . objectKey optFrom) (concat xs)
@@ -135,20 +132,7 @@ main = do
         Left  x -> say n "Error: {}" (Only $ Shown x) >> exitFailure
         Right _ -> say_ n "Done." >> trigger optAddress
   where
-    go :: FilePath -> Bucket -> Text -> Store ()
-    go tmp dest k = do
-        m <- Store.get k (liftEitherT . Pkg.fromFile tmp)
-        n <- thread
-        say n "Retrieved {}" [k]
-        case m of
-            Nothing -> say n "Unable to retrieve package from {}" [k]
-            Just x  -> do
-                say n "Successfully read package description from {}" [k]
-                Store.copy k x dest
-                say n "Copied {} to {}" [build k, build dest]
-
-    thread :: MonadIO m => m Text
-    thread = (Text.drop 9 . Text.pack . show) `liftM` liftIO myThreadId
+    cat s f = map (map AE . Set.toDescList) . f <$> s
 
     trigger Nothing  = return ()
     trigger (Just x) =

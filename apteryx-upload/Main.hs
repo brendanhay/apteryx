@@ -80,11 +80,6 @@ options = Options
         <> help "Print debug output."
          )
 
--- Uploading (via add) needs to be idempotent
-
--- Errors need to be propagated correctly
--- Something about the statuscodes in errors? Remove
-
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
@@ -96,9 +91,9 @@ main = do
         runEitherT (Pkg.fromFile optTemp $ Conduit.sourceHandle hd)
             >>= either throwM return
 
-    void . Store.run optKey 1 e $ do
+    r <- Store.run 1 e $ do
         say n "Uploading {} to {}" [build optFile, build optKey]
-        Store.add p optFile
+        Store.add optKey p optFile
 
     trigger optAddress p
 
