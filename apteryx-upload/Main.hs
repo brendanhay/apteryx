@@ -30,6 +30,7 @@ import qualified System.APT.Package         as Pkg
 import qualified System.APT.Store           as Store
 import           System.APT.Types           hiding (urlEncode)
 import           System.Environment
+import           System.Exit
 import           System.IO
 
 default (ByteString)
@@ -79,6 +80,11 @@ options = Options
         <> help "Print debug output."
          )
 
+-- Uploading (via add) needs to be idempotent
+
+-- Errors need to be propagated correctly
+-- Something about the statuscodes in errors? Remove
+
 main :: IO ()
 main = do
     Options{..} <- parseOptions options
@@ -96,7 +102,9 @@ main = do
 
     trigger optAddress p
 
-    say_ n "Done."
+    case r of
+        Left  x -> say n "Error: {}" (Only $ Shown x) >> exitFailure
+        Right _ -> say_ n "Done." >> trigger optAddress p
   where
     trigger Nothing  _ = return ()
     trigger (Just x) p =

@@ -1,7 +1,6 @@
 {-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE ExtendedDefaultRules       #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE ViewPatterns               #-}
 
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
@@ -114,9 +113,8 @@ catchError = EitherT
     . (try :: IO a -> IO (Either SomeException a))
 
 diff :: (Functor m, MonadIO m) => FilePath -> FilePath -> m [Path]
-diff !a !b = liftM2 f (listFiles b) (listFiles a)
-  where
-    f xs ys = deleteFirstsBy ((==) `on` relative) xs ys
+diff !a !b =
+    liftM2 (deleteFirstsBy ((==) `on` relative)) (listFiles b) (listFiles a)
 
 listFiles :: (MonadIO m, Functor m) => FilePath -> m [Path]
 listFiles !d = foldFiles d
@@ -136,7 +134,7 @@ listFiles !d = foldFiles d
 
     foldDir f =
         liftIO (getDirectoryContents f) >>=
-            mapM foldFiles . map (f </>) . filter dots
+            mapM (foldFiles . (f </>)) . filter dots
 
     dots "."  = False
     dots ".." = False

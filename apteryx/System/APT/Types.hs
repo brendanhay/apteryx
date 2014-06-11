@@ -2,7 +2,6 @@
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
@@ -36,10 +35,12 @@ import qualified Data.ByteString.Char8            as BS
 import           Data.ByteString.From
 import qualified Data.ByteString.Lazy.Char8       as LBS
 import           Data.CaseInsensitive             (CI)
+import           Data.Function                    (on)
 import           Data.Int
 import           Data.List                        (intersperse)
 import           Data.Map.Strict                  (Map)
 import           Data.Monoid                      hiding (All)
+import           Data.Ord
 import           Data.Set                         (Set)
 import           Data.String
 import           Data.Text                        (Text)
@@ -116,20 +117,16 @@ missingField   = Error status409 . mappend "Missing field: " . bytes
 awsError       = Error status500 . mappend "AWS error: " . bytes
 shellError     = Error status500 . mappend "Shell error: " . bytes
 
-data Bucket = Bucket !Text (Maybe Text)
-    deriving (Eq, Show)
-
-bktName :: Bucket -> Text
-bktName (Bucket b _) = b
-
-bktPrefix :: Bucket -> Maybe Text
-bktPrefix (Bucket _ m) = m
+data Bucket = Bucket
+    { bktName   :: !Text
+    , bktPrefix :: Maybe Text
+    } deriving (Eq, Show)
 
 instance Buildable Bucket where
     build (Bucket b m) = build b <> build (maybe mempty ("/" <>) m)
 
 newtype Key = Key Text
-    deriving (Eq, Show)
+    deriving (Eq, Ord, Show)
 
 instance ToURL Key where
     urlEncode (Key t) = urlEncode t
@@ -148,30 +145,6 @@ instance FromByteString Name where
 
 instance Buildable Name where
     build = build . Text.decodeUtf8 . unName
-
-data Vers = Vers
-    { verRaw :: !ByteString
-    , verNum :: [Int]
-    } deriving (Eq, Show)
-
-instance Ord Vers where
-    a `compare` b = verNum a `compare` verNum b
-
-instance ToURL Vers where
-    urlEncode = Text.decodeUtf8 . verRaw
-
-instance ToBytes Vers where
-    bytes = Build.byteString . verRaw
-
-instance Buildable Vers where
-    build = build . Text.decodeUtf8 . verRaw
-
-instance FromByteString Vers where
-    parser = do
-        bs <- takeWhile1 (/= '_')
-        Vers bs <$> either
-            (fail "Unable to parse numeric version") return
-            (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
 
 data Arch
     = All
@@ -286,12 +259,39 @@ data Meta = Meta
 
 instance NFData Meta
 
+data Vers = Vers
+    { verRaw :: !ByteString
+    , verNum :: [Int]
+    } deriving (Eq, Show)
+
+instance Ord Vers where
+    compare = compare `on` verNum
+
+instance ToURL Vers where
+    urlEncode = Text.decodeUtf8 . verRaw
+
+instance ToBytes Vers where
+    bytes = Build.byteString . verRaw
+
+instance Buildable Vers where
+    build = build . Text.decodeUtf8 . verRaw
+
+instance FromByteString Vers where
+    parser = do
+        bs <- takeWhile1 (/= '_')
+        Vers bs <$> either
+            (fail "Unable to parse numeric version") return
+            (parseOnly (decimal `sepBy` satisfy (inClass ".+-~")) bs)
+
 data Entry a = Entry
     { entName :: !Name
     , entVers :: !Vers
     , entArch :: !Arch
     , entAnn  :: !a
-    } deriving (Eq, Ord, Show)
+    } deriving (Eq, Show)
+
+instance Eq a => Ord (Entry a) where
+    compare = compare `on` (\x -> (entName x, Down $ entVers x))
 
 instance NFData a => NFData (Entry a)
 
@@ -300,15 +300,13 @@ instance Show a => Buildable (Entry a) where
 
 type Object  = Entry Key
 type Package = Entry Meta
+type Upload  = Entry ()
 
 stat :: Package -> Stat
 stat = metaStat . entAnn
 
 sizeOf :: Package -> Int64
 sizeOf = unSize . statSize . stat
-
-mkEntry :: Name -> Vers -> Arch -> Entry ()
-mkEntry n v a = Entry n v a ()
 
 instance FromByteString Object where
     parser = takeByteString >>= either (fail "Unable to parse Entry") return . f
@@ -347,8 +345,8 @@ data InRelease = InRelease
     , inPkgs   :: Map Arch (Set Package)
     } deriving (Eq, Show)
 
-mkInRelease :: Text -> Text -> (Time -> Map Arch (Set Package) -> InRelease)
-mkInRelease code desc = \t ps -> InRelease
+mkInRelease :: Text -> Text -> Time -> Map Arch (Set Package) -> InRelease
+mkInRelease code desc t ps = InRelease
     { inOrigin = "Apteryx"
     , inLabel  = "Apteryx"
     , inCode   = code

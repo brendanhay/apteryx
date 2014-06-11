@@ -210,19 +210,6 @@ instance MonadLogger App where
 instance MonadLogger (EitherT e App) where
     log l f = lift (log l f)
 
-instance MonadThrow (EitherT e App) where
-    throwM = lift . throwM
-
-instance MonadCatch (EitherT e App) where
-    catch m f = EitherT $
-        runEitherT m `catch` \e -> runEitherT (f e)
-
-    mask a = EitherT $
-        mask $ \u -> runEitherT (a $ mapEitherT u)
-
-    uninterruptibleMask a = EitherT $
-        uninterruptibleMask $ \u -> runEitherT (a $ mapEitherT u)
-
 type Handler = EitherT Error App Response
 
 runHandler :: Env -> Handler -> IO Response
@@ -303,7 +290,8 @@ getPackage :: Arch ::: Name ::: Vers ::: Request -> Handler
 getPackage (a ::: n ::: v ::: rq) = do
     e@Env{..} <- ask
 
-    u <- runStore e (Store.presign (Entry n v a ()) 10) >>= either throwM return
+    u <- runStore e (Store.presign (optKey _options) (Entry n v a ()) 10)
+        >>= either throwM return
 
     let (host, url) = BS.break (== '/') (BS.drop 8 u)
         (path, qry) = BS.break (== '?') url
@@ -324,34 +312,36 @@ getPackage (a ::: n ::: v ::: rq) = do
 
 addPackage :: Arch ::: Name ::: Vers -> Handler
 addPackage (a ::: n ::: v) = do
-    e <- ask
-    r <- runStore e $ Store.metadata etry
-    either (const missing) (const found) r
+    e@Env{..} <- ask
+    r         <- runStore e (Store.metadata (optKey _options) x)
+    either (const missing)
+           (const found)
+           r
   where
     missing = do
-        sayT name "Unable to find package {}" [etry]
+        s "Unable to find package {}" [x]
         return $ plain status404 "not-found\n"
 
     found = do
-        sayT name "Found package {}, rebuilding local index" [etry]
+        s "Found package {}, rebuilding local index" [x]
         sync $ \l -> withMVar l . const
         return $ plain status200 "index-rebuilt\n"
 
-    etry = mkEntry n v a
-    name = "add-package"
+    x = Entry n v a ()
+    s = sayT "add-package"
 
 triggerRebuild :: Handler
 triggerRebuild = sync lock >>= respond
   where
     respond True = do
-        sayT_ name "Triggering local index rebuild"
+        sayT_ n "Triggering local index rebuild"
         return $ plain status202 "triggered-rebuild\n"
 
     respond False = do
-        sayT_ name "Rebuild already in progress"
+        sayT_ n "Rebuild already in progress"
         return $ plain status200 "rebuild-in-progress\n"
 
-    name = "rebuild"
+    n = "rebuild"
 
     lock l f = do
         m <- tryTakeMVar l
@@ -371,15 +361,8 @@ getIndex :: FilePath
          -> Maybe Range ::: Maybe Time ::: Maybe Time
          -> Handler
 getIndex p (range ::: ifRange ::: ifModified) = do
-    Options{..} <- asks _options
-
-    let path  = optWWW </> p
-        hs    = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
-                , ("Pragma",        "no-cache")
-                , ("Expires",       "0")
-                ]
-
-    st <- catchError (getFileStat path)
+    path <- asks ((</> p) . optWWW . _options)
+    st   <- catchError (getFileStat path)
 
     return $ case st of
         Nothing       -> plain status404 "not-found\n"
@@ -409,6 +392,11 @@ getIndex p (range ::: ifRange ::: ifModified) = do
                                 else responseFile status200 hs path Nothing
                         Nothing ->
                             responseFile status200 hs path Nothing
+  where
+    hs = [ ("Cache-Control", "no-cache, no-store, must-revalidate")
+         , ("Pragma",        "no-cache")
+         , ("Expires",       "0")
+         ]
 
 sync :: (MVar () -> IO () -> IO a) -> EitherT Error App a
 sync f = do
@@ -419,12 +407,12 @@ sync f = do
         display     = Log.debug _logger . msg . show
 
     catchError . f _lock $
-        runStore e (Index.sync optTemp optWWW optArchs ctor) >>=
-            either display (mapM_ display)
+        runStore e (Index.sync optKey optTemp optWWW optArchs ctor) >>=
+            either display return
 
 runStore :: MonadIO m => Env -> Store a -> m (Either Error a)
 runStore Env{..} s = liftIO $ fmapL (awsError . show) <$>
-    Store.run (optKey _options) (optVersions _options) _aws s
+    Store.run (optVersions _options) _aws s
 
 blank :: Response
 blank = plain status200 ""

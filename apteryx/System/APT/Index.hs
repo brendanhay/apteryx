@@ -25,8 +25,8 @@ module System.APT.Index
     ) where
 
 import           Control.Applicative
-import           Control.Arrow                    (second)
 import           Control.Monad
+import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Resource     (runResourceT)
 import           Data.ByteString.Builder
@@ -34,7 +34,6 @@ import qualified Data.ByteString.Char8            as BS
 import           Data.Conduit
 import qualified Data.Conduit.Binary              as Conduit
 import qualified Data.Conduit.List                as Conduit
-import qualified Data.Foldable                    as Fold
 import           Data.List                        (intersperse, sort)
 import           Data.Map.Strict                  (Map)
 import qualified Data.Map.Strict                  as Map
@@ -42,7 +41,6 @@ import           Data.Maybe
 import           Data.Monoid                      hiding (All)
 import           Data.Set                         (Set)
 import qualified Data.Set                         as Set
-import           Network.AWS
 import           Network.HTTP.Conduit             hiding (path)
 import           Prelude                          hiding (lookup)
 import           System.APT.Compression
@@ -61,33 +59,23 @@ import           System.Process
 
 default (Builder)
 
-sync :: FilePath
+sync :: Bucket
+     -> FilePath
      -> FilePath
      -> [Arch]
      -> (Time -> Map Arch (Set Package) -> InRelease)
-     -> Store [Error]
-sync tmp dest as ctor = do
-    (es, r) <- latest ctor
-    c       <- liftIO $ generate tmp dest as r
-    return . ($ concatMap fromError es) $
-        case c of
-            ExitSuccess   -> id
-            ExitFailure _ ->
-                (shellError ("Failed to copy " ++ tmp ++ " to " ++ dest) :)
-
-latest :: (Time -> Map Arch (Set Package) -> InRelease)
-       -> Store ([AWSError], InRelease)
-latest ctor = do
-    r <- Store.entries >>= Store.parMapM (Fold.foldrM f mempty)
-    t <- getCurrentTime
-    return $ second (ctor t . Map.unionsWith (<>)) r
-  where
-    f x m = do
-        y <- Store.metadata x
-        return $ Map.insertWith (<>) (entArch y) (Set.singleton y) m
+     -> Store ()
+sync b tmp cwd as ctor = do
+    t  <- getCurrentTime
+    xs <- Store.versioned b
+    c  <- liftIO $ generate tmp cwd as (ctor t xs)
+    case c of
+        ExitSuccess   -> return ()
+        ExitFailure _ -> throwM $
+            shellError ("Failed to copy " ++ tmp ++ " to " ++ cwd)
 
 generate :: FilePath -> FilePath -> [Arch] -> InRelease -> IO ExitCode
-generate tmp dest as r@InRelease{..} =
+generate tmp cwd as r@InRelease{..} =
     withTempDirectory tmp "apt." $ \path -> do
         let i18n = path </> "i18n"
             en   = i18n </> "Translation-en" <.> compressExt
@@ -112,12 +100,12 @@ generate tmp dest as r@InRelease{..} =
             putBuilders hd (Pkg.toIndex r)
             putBuilders hd (Pkg.toIndex $ sort ids)
 
-        createDirectoryIfMissing True dest
+        createDirectoryIfMissing True cwd
 
-        diff path dest >>= mapM_ removePath
+        diff path cwd >>= mapM_ removePath
 
         -- FIXME: Avoid shelling out?
-        system $ "cp -rf " ++ path ++ "/* " ++ dest ++ "/"
+        system $ "cp -rf " ++ path ++ "/* " ++ cwd ++ "/"
   where
     packages = Map.toList $ Map.mapWithKey filtered valid
       where
@@ -181,7 +169,7 @@ reindex Entry{..} host = liftIO $ do
         $ filename entArch entName entVers
 
 filename :: Arch -> Name -> Vers -> Builder
-filename a n v = "packages/" +++ a +++ "/" +++ n +++ "/" +++ (urlEncode v)
+filename a n v = "packages/" +++ a +++ "/" +++ n +++ "/" +++ urlEncode v
 
 putBuilders :: Handle -> [Builder] -> IO ()
 putBuilders hd bs = hPutBuilder hd (joinBuilders bs) >> hFlush hd
