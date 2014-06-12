@@ -3,6 +3,6 @@ set -e
 
 app=apteryx-server
 
-if [ -L "/etc/service/$app" ]
+if [ -L "/etc/service/$app" ]; then
     sv down $app
 fi
